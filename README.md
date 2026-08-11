@@ -1,14 +1,63 @@
 # 大雄无限画布插件仓库
 
-该仓库是大雄无限画布插件管理器的官方更新源。
+这是大雄无限画布的插件、插件安装包和桌面插件管理器仓库。
 
-## 插件管理器
+- 大雄无限画布主仓库：[hero8152/Infinite-Canvas](https://github.com/hero8152/Infinite-Canvas)
+- 插件安装包：[Releases](https://github.com/heyu1084916812/daxiong-canvas-plugins/releases)
+- Windows 桌面插件管理器：[plugin-manager](https://github.com/heyu1084916812/daxiong-canvas-plugins/tree/main/plugin-manager)
 
-`plugin-manager/` 提供 Windows 桌面版“大雄插件管理”。下载 `大雄插件管理.exe` 后，将它放到大雄无限画布主目录（与 `大雄无限画布.exe`、`plugin_host.py` 同级）再运行。
+## 普通用户如何使用
 
-桌面版会自动检查本仓库的插件更新索引，并提供一键更新；同时保留本地 ZIP 安装和升级入口。
+### 1. 先准备大雄无限画布
 
-## 发布插件
+从[大雄无限画布主仓库](https://github.com/hero8152/Infinite-Canvas)获取画布。以下两种启动形式都兼容：
+
+- **便携 EXE 版**：主目录中有 `大雄无限画布.exe`。
+- **原始启动器版**：主目录中有 `plugin_host.py`，并通过 `start.bat`、`run.bat` 或 Python 启动。
+
+### 2. 安装桌面插件管理器
+
+1. 进入 [`plugin-manager/`](https://github.com/heyu1084916812/daxiong-canvas-plugins/tree/main/plugin-manager)。
+2. 下载 `大雄插件管理.exe`。
+3. 把它放进大雄无限画布主目录，不要放在单独的下载目录。
+4. 双击 `大雄插件管理.exe`。
+
+插件管理器会先连接已经运行的大雄画布；如果后台尚未运行，会自动寻找并使用：
+
+1. `大雄无限画布.exe`
+2. `python/python.exe + plugin_host.py` 或系统 Python
+3. `start.bat` / `run.bat`
+
+### 3. 第一次安装插件
+
+1. 打开本仓库的 [Releases](https://github.com/heyu1084916812/daxiong-canvas-plugins/releases)。
+2. 下载需要的插件 ZIP。
+3. 在“大雄插件管理”中点击“安装 ZIP”。
+4. 选择刚下载的 ZIP，安装后按提示刷新画布或重启大雄画布。
+
+每个插件都是独立安装包，可以按需安装，不需要一次安装全部插件。
+
+### 4. 以后更新插件
+
+插件安装后，桌面管理器会自动读取本仓库的更新索引：
+
+- 有新版时显示本地版本和最新版本。
+- 点击“一键更新”即可下载并升级。
+- 下载后会校验文件大小、SHA-256、插件 ID、版本号和主程序兼容性。
+- 更新默认保留 `plugin-data/` 中的插件数据。
+- 包含后端的插件更新后需要重启大雄画布；纯前端插件刷新画布即可。
+
+## 当前插件
+
+| 插件 | ID | 当前版本 |
+|---|---|---:|
+| 设计大师 | `canvas-agent` | 2.2.48 |
+| 局部提取与图像融合 | `local-patch` | 2.7.1 |
+| 长图节点 | `long-image-node` | 1.2.0 |
+| 画布 Bug 修复 | `canvas-bug-fix` | 1.7.0 |
+| 节点对齐 | `node-align-distribute` | 1.2.1 |
+
+## 插件开发与发布
 
 1. 修改 `plugins/<插件ID>/` 中的源码。
 2. 将 `plugin.json` 的 `version` 提升为新的 `x.y.z` 版本。
@@ -20,4 +69,4 @@
 
 ## 安全边界
 
-发布包不会包含测试目录、缓存、日志、运行数据、图片结果或 `plugin-data`。插件管理器下载后还会校验文件大小、SHA-256、插件 ID、版本号和主程序兼容性。
+发布包不会包含测试目录、缓存、日志、运行数据、图片结果或 `plugin-data`。插件管理器不会在没有用户确认的情况下静默安装插件更新。
