@@ -19,6 +19,7 @@ try {
     & $Csc /nologo /target:winexe /platform:anycpu /optimize+ /win32icon:$Icon `
         /reference:System.dll /reference:System.Core.dll /reference:System.Drawing.dll `
         /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll `
+        /reference:System.Management.dll `
         /reference:System.Web.Extensions.dll /reference:System.Windows.Forms.dll `
         /resource:$BootstrapZip,Daxiong.PluginSystemBootstrap.zip `
         /out:$Output $Source

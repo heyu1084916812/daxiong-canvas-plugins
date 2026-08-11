@@ -4,7 +4,7 @@
 
 - 大雄无限画布主仓库：[hero8152/Infinite-Canvas](https://github.com/hero8152/Infinite-Canvas)
 - 插件安装包：[Releases](https://github.com/heyu1084916812/daxiong-canvas-plugins/releases)
-- Windows 桌面插件管理器：[下载正式版 EXE](https://github.com/heyu1084916812/daxiong-canvas-plugins/releases/tag/plugin-manager-v1.3.0)
+- Windows 桌面插件管理器：[下载正式版 EXE](https://github.com/heyu1084916812/daxiong-canvas-plugins/releases/tag/plugin-manager-v1.3.1)
 
 ## 普通用户如何使用
 
@@ -17,7 +17,7 @@
 
 ### 2. 安装桌面插件管理器
 
-1. 打开[大雄插件管理 v1.3.0 正式发行版](https://github.com/heyu1084916812/daxiong-canvas-plugins/releases/tag/plugin-manager-v1.3.0)。
+1. 打开[大雄插件管理 v1.3.1 正式发行版](https://github.com/heyu1084916812/daxiong-canvas-plugins/releases/tag/plugin-manager-v1.3.1)。
 2. 在“资源”中下载 `Daxiong-Plugin-Manager.exe`，不要下载 GitHub 自动生成的 `Source code`。
 3. 把它放进大雄无限画布主目录，不要放在单独的下载目录。
 4. 双击 `Daxiong-Plugin-Manager.exe`（也可以自行改名为“大雄插件管理.exe”）。
@@ -25,6 +25,8 @@
 副标题下方提供“项目主页”和当前版本号。管理器启动后会自动检查自己的新版；发现新版时主动弹窗，确认后自动下载、校验、替换并重新打开。
 
 如果画布还没有插件系统，点击“接入画布”。插件管理器会从 EXE 内部安装插件后台并生成 `run.bat`，不修改 `main.py`，已有相关文件会先备份到 `data/plugin-system-backups/`。
+
+管理器会直接读取 GitHub 仓库的插件清单，并把全部插件显示为卡片。已经安装的插件显示当前状态和更新按钮；尚未安装的插件显示“一键安装”，用户可以按需选择，不必先手动安装一次。即使画布里还是旧版插件后台，未安装插件也不会再被隐藏。
 
 插件管理器会先连接已经运行的大雄画布；如果后台尚未运行，会自动寻找并使用：
 

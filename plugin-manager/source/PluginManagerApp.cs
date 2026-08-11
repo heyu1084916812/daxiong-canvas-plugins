@@ -6,6 +6,7 @@ using System.Drawing.Drawing2D;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Management;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
@@ -260,8 +261,10 @@ internal sealed class SlideToggle : Control
 
 internal sealed class PluginManagerForm : Form
 {
-    private const string ManagerVersion = "1.3.0";
+    private const string ManagerVersion = "1.3.1";
     private const string RepositoryUrl = "https://github.com/heyu1084916812/daxiong-canvas-plugins";
+    private const string PluginIndexUrl = "https://raw.githubusercontent.com/heyu1084916812/daxiong-canvas-plugins/updates/plugins-index.json";
+    private const string PluginReleasePrefix = "https://github.com/heyu1084916812/daxiong-canvas-plugins/releases/download/";
     private const string ReleasesApiUrl = "https://api.github.com/repos/heyu1084916812/daxiong-canvas-plugins/releases?per_page=30";
     private readonly string baseDir;
     private readonly int port;
@@ -432,17 +435,22 @@ internal sealed class PluginManagerForm : Form
         try
         {
             SetBusy(repair ? "正在修复插件系统…" : "正在接入插件系统…");
+            bool backendWasRunning = PortIsOccupied();
             string backup = InstallEmbeddedPluginSystem();
             canvasConnected = false;
-            if (PortIsOccupied() && !EndpointReady())
+            if (backendWasRunning)
             {
-                SetReady("插件系统已接入 · 等待重启画布");
-                MessageBox.Show(this,
-                    "插件系统已经接入完成。\n\n检测到画布目前正在运行，请先完全退出旧画布，再重新打开插件管理器。\n备份位置：" + backup,
-                    "接入完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
+                string stopDetail;
+                if (!TryStopOwnedCanvasBackend(out stopDetail))
+                {
+                    SetReady("插件系统已接入 · 等待重启画布");
+                    MessageBox.Show(this,
+                        "插件系统文件已经接入，但端口 " + port + " 上的后台不能安全地自动关闭。\n\n" + stopDetail + "\n请完全退出正在运行的画布，再重新打开插件管理器。\n备份位置：" + backup,
+                        "接入完成，等待重启", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
             }
-            MessageBox.Show(this, "插件系统已接入完成。现在将启动插件后台。\n\n备份位置：" + backup, "接入完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, "插件系统已接入完成。现在将启动新版插件后台。\n\n备份位置：" + backup, "接入完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
             ConnectOrStart();
         }
         catch (Exception ex)
@@ -506,7 +514,7 @@ internal sealed class PluginManagerForm : Form
                 File.Copy(stagedRun, targetRun, true);
                 Directory.CreateDirectory(Path.Combine(baseDir, "plugins"));
                 Directory.CreateDirectory(Path.Combine(baseDir, "plugin-data"));
-                File.WriteAllText(Path.Combine(dataDir, "plugin-system-integrated.txt"), "version=1.3.0\r\ninstalled=" + DateTime.Now.ToString("s") + "\r\n", Encoding.UTF8);
+                File.WriteAllText(Path.Combine(dataDir, "plugin-system-integrated.txt"), "version=1.3.1\r\ninstalled=" + DateTime.Now.ToString("s") + "\r\n", Encoding.UTF8);
             }
             catch
             {
@@ -545,6 +553,94 @@ internal sealed class PluginManagerForm : Form
             }
         }
         catch { return false; }
+    }
+
+    private bool TryStopOwnedCanvasBackend(out string detail)
+    {
+        detail = "";
+        int processId = FindListeningProcessId();
+        if (processId <= 0)
+        {
+            detail = "没有找到端口对应的进程，请手动退出画布后台。";
+            return false;
+        }
+        string commandLine = "";
+        string executablePath = "";
+        try
+        {
+            using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(
+                "SELECT ExecutablePath, CommandLine FROM Win32_Process WHERE ProcessId=" + processId))
+            {
+                foreach (ManagementObject item in searcher.Get())
+                {
+                    executablePath = Convert.ToString(item["ExecutablePath"] ?? "");
+                    commandLine = Convert.ToString(item["CommandLine"] ?? "");
+                    break;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            detail = "无法核对后台进程路径：" + ex.Message;
+            return false;
+        }
+        string bundledPython = Path.GetFullPath(Path.Combine(baseDir, "python", "python.exe"));
+        string hostPath = Path.GetFullPath(Path.Combine(baseDir, "plugin_host.py"));
+        string mainPath = Path.GetFullPath(Path.Combine(baseDir, "main.py"));
+        bool matchingPython = executablePath.Equals(bundledPython, StringComparison.OrdinalIgnoreCase)
+            || commandLine.IndexOf(bundledPython, StringComparison.OrdinalIgnoreCase) >= 0;
+        bool matchingEntry = commandLine.IndexOf(hostPath, StringComparison.OrdinalIgnoreCase) >= 0
+            || commandLine.IndexOf(mainPath, StringComparison.OrdinalIgnoreCase) >= 0;
+        if (!matchingPython || !matchingEntry)
+        {
+            detail = "端口由其他程序或另一个画布目录占用，未自动关闭。进程 PID：" + processId;
+            return false;
+        }
+        try
+        {
+            using (Process process = Process.GetProcessById(processId))
+            {
+                process.Kill();
+                process.WaitForExit(5000);
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            detail = "当前画布后台停止失败：" + ex.Message;
+            return false;
+        }
+    }
+
+    private int FindListeningProcessId()
+    {
+        try
+        {
+            ProcessStartInfo info = new ProcessStartInfo
+            {
+                FileName = "netstat.exe",
+                Arguments = "-ano -p tcp",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true
+            };
+            using (Process process = Process.Start(info))
+            {
+                string output = process.StandardOutput.ReadToEnd();
+                process.WaitForExit(5000);
+                foreach (string line in output.Split(new char[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    string[] parts = line.Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length < 5 || !parts[0].Equals("TCP", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!parts[1].EndsWith(":" + port, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!parts[3].Equals("LISTENING", StringComparison.OrdinalIgnoreCase)) continue;
+                    int processId;
+                    if (int.TryParse(parts[4], out processId)) return processId;
+                }
+            }
+        }
+        catch { }
+        return 0;
     }
 
     private void BeginManagerUpdateCheck()
@@ -918,16 +1014,134 @@ internal sealed class PluginManagerForm : Form
         try
         {
             SetBusy("正在读取插件并检查更新…");
-            Dictionary<string, object> data;
-            try { data = ApiJson("GET", "/updates"); }
-            catch { data = ApiJson("GET", "/plugins"); }
+            Dictionary<string, object> data = ApiJson("GET", "/plugins");
+            Exception repositoryError = null;
+            try { data = MergeRepositoryCatalog(data); }
+            catch (Exception ex)
+            {
+                repositoryError = ex;
+                try { data = ApiJson("GET", "/updates"); }
+                catch { }
+            }
             canvasConnected = true;
             Render(data);
+            if (repositoryError != null)
+            {
+                AddManagerNotice("插件仓库暂时无法连接", "当前只显示本地插件，未安装的仓库插件没有丢失。请检查网络后重新打开管理器。", Color.FromArgb(255, 247, 237));
+                SetReady("仓库连接失败 · 仅显示本地插件");
+                return;
+            }
+            if (!data.ContainsKey("available_plugins") || !data.ContainsKey("available_count"))
+            {
+                AddManagerNotice("插件系统版本过旧", "当前后台不会返回未安装的仓库插件。点击右上角“接入画布”完成修复，完全退出画布后重新打开。", Color.FromArgb(254, 249, 195));
+                SetReady("插件系统需要接入修复");
+                return;
+            }
             string count = ValueText(data, "compatible_update_count");
             string availableCount = ValueText(data, "available_count");
             SetReady(count.Length > 0 && count != "0" ? "发现 " + count + " 个可用更新" : (availableCount.Length > 0 && availableCount != "0" ? "仓库有 " + availableCount + " 个插件可安装" : "已连接 · 端口 " + port));
         }
         catch (Exception ex) { ShowError("插件列表读取失败：" + ex.Message); }
+    }
+
+    private Dictionary<string, object> MergeRepositoryCatalog(Dictionary<string, object> data)
+    {
+        string indexPath = Path.Combine(Path.GetTempPath(), "daxiong-plugin-index-" + Guid.NewGuid().ToString("N") + ".json");
+        string json;
+        try { DownloadRepositoryFile(PluginIndexUrl, indexPath, 30000); json = File.ReadAllText(indexPath, Encoding.UTF8); }
+        finally { try { if (File.Exists(indexPath)) File.Delete(indexPath); } catch { } }
+        Dictionary<string, object> catalog = Parse(json);
+        if (Convert.ToInt32(catalog.ContainsKey("schema_version") ? catalog["schema_version"] : 0) != 1)
+            throw new InvalidDataException("插件仓库清单版本不受支持。请更新插件管理器。");
+        object rawCatalogPlugins;
+        object[] catalogPlugins = catalog.TryGetValue("plugins", out rawCatalogPlugins) ? rawCatalogPlugins as object[] : null;
+        if (catalogPlugins == null) throw new InvalidDataException("插件仓库清单缺少插件列表。");
+
+        object rawInstalled;
+        object[] installed = data.TryGetValue("plugins", out rawInstalled) ? rawInstalled as object[] : null;
+        if (installed == null) installed = new object[0];
+        Dictionary<string, Dictionary<string, object>> installedById = new Dictionary<string, Dictionary<string, object>>(StringComparer.OrdinalIgnoreCase);
+        foreach (object value in installed)
+        {
+            Dictionary<string, object> local = value as Dictionary<string, object>;
+            if (local != null && ValueText(local, "id").Length > 0) installedById[ValueText(local, "id")] = local;
+        }
+
+        List<object> available = new List<object>();
+        int updateCount = 0;
+        foreach (object value in catalogPlugins)
+        {
+            Dictionary<string, object> remote = value as Dictionary<string, object>;
+            if (remote == null) continue;
+            string pluginId = ValueText(remote, "id");
+            string version = ValueText(remote, "version");
+            string downloadUrl = ValueText(remote, "download_url");
+            string sha256 = ValueText(remote, "sha256");
+            if (pluginId.Length == 0 || version.Length == 0 || !downloadUrl.StartsWith(PluginReleasePrefix, StringComparison.OrdinalIgnoreCase) || sha256.Length != 64)
+                throw new InvalidDataException("插件仓库中的发布信息不完整：" + (pluginId.Length > 0 ? pluginId : "未知插件"));
+            Dictionary<string, object> local;
+            if (installedById.TryGetValue(pluginId, out local))
+            {
+                bool hasUpdate = CompareVersion(version, ValueText(local, "version")) > 0;
+                local["latest_version"] = version;
+                local["update_available"] = hasUpdate;
+                local["update_compatible"] = true;
+                local["repository_download_url"] = downloadUrl;
+                local["repository_sha256"] = sha256;
+                local["repository_size"] = remote.ContainsKey("size") ? remote["size"] : 0;
+                if (hasUpdate) updateCount++;
+                continue;
+            }
+            available.Add(new Dictionary<string, object>
+            {
+                { "id", pluginId }, { "name", ValueText(remote, "name").Length > 0 ? ValueText(remote, "name") : pluginId },
+                { "description", ValueText(remote, "description").Length > 0 ? ValueText(remote, "description") : "可从插件仓库一键安装" },
+                { "author", ValueText(remote, "author").Length > 0 ? ValueText(remote, "author") : "daxiong-canvas-plugins" },
+                { "version", version }, { "latest_version", version }, { "installed", false },
+                { "manifest_valid", true }, { "compatible", true }, { "enabled", false },
+                { "backend_registered", false }, { "frontend_active", false }, { "health", "not_installed" },
+                { "install_available", true }, { "install_compatible", true }, { "update_available", false },
+                { "update_compatible", false }, { "repository_download_url", downloadUrl }, { "repository_sha256", sha256 },
+                { "repository_size", remote.ContainsKey("size") ? remote["size"] : 0 }
+            });
+        }
+        data["available_plugins"] = available.ToArray();
+        data["available_count"] = available.Count;
+        data["update_count"] = updateCount;
+        data["compatible_update_count"] = updateCount;
+        data["repository_url"] = PluginIndexUrl;
+        data["catalog_generated_at"] = ValueText(catalog, "generated_at");
+        return data;
+    }
+
+    private void AddManagerNotice(string title, string detail, Color background)
+    {
+        RoundedPanel notice = new RoundedPanel
+        {
+            Width = CardWidth(), Height = 74, Radius = 18, Margin = new Padding(5),
+            BackColor = background, BorderColor = Color.FromArgb(70, 148, 163, 184)
+        };
+        Label titleLabel = new Label
+        {
+            Text = title, Location = new Point(18, 12), Size = new Size(notice.Width - 36, 22),
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+            Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold),
+            ForeColor = Color.FromArgb(17, 24, 39), BackColor = Color.Transparent
+        };
+        Label detailLabel = new Label
+        {
+            Text = detail, Location = new Point(18, 39), Size = new Size(notice.Width - 36, 22),
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+            Font = new Font("Microsoft YaHei UI", 8.6F, FontStyle.Regular),
+            ForeColor = Color.FromArgb(71, 85, 105), BackColor = Color.Transparent,
+            AutoEllipsis = true
+        };
+        notice.Controls.Add(titleLabel);
+        notice.Controls.Add(detailLabel);
+        cards.Controls.Add(notice);
+        cards.Controls.SetChildIndex(notice, 0);
+        ResizeCards();
+        ApplyThemeTree(notice);
     }
 
     private void Render(Dictionary<string, object> data)
@@ -1354,7 +1568,20 @@ private LocalVersionInfo InspectLocalVersions()
         string latest = ValueText(plugin, "latest_version");
         if (MessageBox.Show("将“" + name + "”更新到 v" + latest + "。\n\n更新包会先校验，插件数据会保留。是否继续？", "一键更新", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
         Dictionary<string, object> result = null;
-        RunAction("更新 " + name, delegate { result = ApiJson("POST", "/" + Uri.EscapeDataString(ValueText(plugin, "id")) + "/update-from-repository"); });
+        RunAction("更新 " + name, delegate
+        {
+            string package = null;
+            try
+            {
+                if (ValueText(plugin, "repository_download_url").Length > 0)
+                {
+                    package = DownloadRepositoryPackage(plugin);
+                    result = Upload("/" + Uri.EscapeDataString(ValueText(plugin, "id")) + "/upgrade", package);
+                }
+                else result = ApiJson("POST", "/" + Uri.EscapeDataString(ValueText(plugin, "id")) + "/update-from-repository");
+            }
+            finally { try { if (package != null && File.Exists(package)) File.Delete(package); } catch { } }
+        });
         if (result == null) return;
         if (Bool(result, "restart_required"))
             MessageBox.Show(this, "更新完成。该插件包含后端功能，请重启大雄画布后生效。", "插件更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -1367,8 +1594,92 @@ private LocalVersionInfo InspectLocalVersions()
         string version = ValueText(plugin, "version");
         if (MessageBox.Show("将从插件仓库安装“" + name + "”v" + version + "。\n\n安装包会先完成安全和兼容性校验。是否继续？", "一键安装", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
         Dictionary<string, object> result = null;
-        RunAction("安装 " + name, delegate { result = ApiJson("POST", "/" + Uri.EscapeDataString(ValueText(plugin, "id")) + "/install-from-repository"); });
+        RunAction("安装 " + name, delegate
+        {
+            string package = null;
+            try
+            {
+                if (ValueText(plugin, "repository_download_url").Length > 0)
+                {
+                    package = DownloadRepositoryPackage(plugin);
+                    result = Upload("/install", package);
+                }
+                else result = ApiJson("POST", "/" + Uri.EscapeDataString(ValueText(plugin, "id")) + "/install-from-repository");
+            }
+            finally { try { if (package != null && File.Exists(package)) File.Delete(package); } catch { } }
+        });
         if (result != null) MessageBox.Show(this, "安装完成。刷新画布后即可使用；如果插件包含后端功能，建议重启一次大雄画布。", "插件安装", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    private string DownloadRepositoryPackage(Dictionary<string, object> plugin)
+    {
+        string url = ValueText(plugin, "repository_download_url");
+        string expected = ValueText(plugin, "repository_sha256").ToLowerInvariant();
+        if (!url.StartsWith(PluginReleasePrefix, StringComparison.OrdinalIgnoreCase) || expected.Length != 64)
+            throw new InvalidDataException("插件下载地址或校验信息不安全，已停止安装。");
+        long declaredSize = 0;
+        object rawSize;
+        try { if (plugin.TryGetValue("repository_size", out rawSize)) declaredSize = Convert.ToInt64(rawSize); }
+        catch { declaredSize = 0; }
+        if (declaredSize < 1 || declaredSize > 200L * 1024L * 1024L)
+            throw new InvalidDataException("插件安装包声明的大小异常，已停止安装。");
+        string tempPath = Path.Combine(Path.GetTempPath(), "daxiong-plugin-" + Guid.NewGuid().ToString("N") + ".zip");
+        try
+        {
+            DownloadRepositoryFile(url, tempPath, 120000);
+            FileInfo file = new FileInfo(tempPath);
+            if (file.Length != declaredSize) throw new InvalidDataException("插件下载不完整，文件大小与仓库记录不一致。");
+            string actual = ComputeSha256(tempPath);
+            if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("插件安装包 SHA-256 校验失败，已停止安装。");
+            return tempPath;
+        }
+        catch
+        {
+            try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+            throw;
+        }
+    }
+
+    private void DownloadRepositoryFile(string url, string destination, int timeout)
+    {
+        Exception webError = null;
+        try
+        {
+            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
+            request.Method = "GET";
+            request.Timeout = timeout;
+            request.UserAgent = "Daxiong-Plugin-Manager/" + ManagerVersion;
+            using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+            using (Stream input = response.GetResponseStream())
+            using (FileStream output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None)) input.CopyTo(output);
+            return;
+        }
+        catch (Exception ex)
+        {
+            webError = ex;
+            try { if (File.Exists(destination)) File.Delete(destination); } catch { }
+        }
+
+        string python = Path.Combine(baseDir, "python", "python.exe");
+        if (!File.Exists(python)) throw new InvalidOperationException("无法连接 GitHub 插件仓库：" + webError.Message, webError);
+        ProcessStartInfo info = new ProcessStartInfo
+        {
+            FileName = python,
+            Arguments = "-c \"import requests,sys; r=requests.get(sys.argv[1],timeout=(10,120)); r.raise_for_status(); open(sys.argv[2],'wb').write(r.content)\" \"" + url.Replace("\"", "") + "\" \"" + destination.Replace("\"", "") + "\"",
+            WorkingDirectory = baseDir,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardError = true
+        };
+        using (Process process = Process.Start(info))
+        {
+            string error = process.StandardError.ReadToEnd();
+            if (!process.WaitForExit(timeout) || process.ExitCode != 0 || !File.Exists(destination))
+            {
+                try { if (!process.HasExited) process.Kill(); } catch { }
+                throw new InvalidOperationException("无法连接 GitHub 插件仓库：" + (error.Trim().Length > 0 ? error.Trim() : webError.Message), webError);
+            }
+        }
     }
 
     private void ShowHealth(Dictionary<string, object> plugin)
