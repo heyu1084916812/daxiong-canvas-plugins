@@ -120,7 +120,7 @@ internal static class WindowEffects
     }
 }
 
-internal sealed class RoundedButton : Button
+internal class RoundedButton : Button
 {
     internal int Radius = 9;
 
@@ -133,6 +133,31 @@ internal sealed class RoundedButton : Button
             Region old = Region;
             Region = new Region(path);
             if (old != null) old.Dispose();
+        }
+    }
+}
+
+internal sealed class GitHubButton : RoundedButton
+{
+    protected override void OnPaint(PaintEventArgs eventArgs)
+    {
+        base.OnPaint(eventArgs);
+        eventArgs.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        int size = 16;
+        int left = 12;
+        int top = (Height - size) / 2;
+        Color mark = ForeColor;
+        Color cutout = BackColor;
+        using (SolidBrush markBrush = new SolidBrush(mark))
+        using (SolidBrush cutoutBrush = new SolidBrush(cutout))
+        {
+            eventArgs.Graphics.FillEllipse(markBrush, left, top, size, size);
+            eventArgs.Graphics.FillEllipse(cutoutBrush, left + 4, top + 4, 8, 7);
+            Point[] leftEar = new Point[] { new Point(left + 4, top + 6), new Point(left + 4, top + 2), new Point(left + 7, top + 4) };
+            Point[] rightEar = new Point[] { new Point(left + 9, top + 4), new Point(left + 12, top + 2), new Point(left + 12, top + 6) };
+            eventArgs.Graphics.FillPolygon(cutoutBrush, leftEar);
+            eventArgs.Graphics.FillPolygon(cutoutBrush, rightEar);
+            eventArgs.Graphics.FillEllipse(cutoutBrush, left + 6, top + 9, 5, 6);
         }
     }
 }
@@ -232,7 +257,7 @@ internal sealed class SlideToggle : Control
 
 internal sealed class PluginManagerForm : Form
 {
-    private const string ManagerVersion = "1.1.0";
+    private const string ManagerVersion = "1.2.0";
     private const string RepositoryUrl = "https://github.com/heyu1084916812/daxiong-canvas-plugins";
     private const string ReleasesApiUrl = "https://api.github.com/repos/heyu1084916812/daxiong-canvas-plugins/releases?per_page=30";
     private readonly string baseDir;
@@ -245,9 +270,6 @@ internal sealed class PluginManagerForm : Form
     private readonly Label coreVersionLabel;
     private readonly Label status;
     private readonly Button installButton;
-    private readonly Button checkUpdatesButton;
-    private readonly Button rescanButton;
-    private readonly Button detectVersionButton;
     private readonly Button themeButton;
     private readonly Button projectButton;
     private readonly System.Windows.Forms.Timer startupTimer;
@@ -282,7 +304,7 @@ internal sealed class PluginManagerForm : Form
         DoubleBuffered = true;
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
 
-        RoundedPanel header = new RoundedPanel { Dock = DockStyle.Top, Height = 88, Radius = 24, BackColor = Color.FromArgb(92, 255, 255, 255) };
+        RoundedPanel header = new RoundedPanel { Dock = DockStyle.Top, Height = 110, Radius = 24, BackColor = Color.FromArgb(92, 255, 255, 255) };
         Label title = new Label { AutoSize = true, Location = new Point(22, 13), Text = "大雄插件管理", Font = new Font("Microsoft YaHei UI", 16F, FontStyle.Bold), ForeColor = Color.FromArgb(17, 24, 39), BackColor = Color.Transparent };
         Label subtitle = new Label { AutoSize = true, Location = new Point(24, 49), Text = "轻量桌面版 · 轻松管理你的画布插件", Font = new Font("Microsoft YaHei UI", 8.5F, FontStyle.Regular), ForeColor = Color.FromArgb(100, 116, 139), BackColor = Color.Transparent };
         themeButton = MakeButton("☾", Color.FromArgb(241, 245, 249), Color.FromArgb(17, 24, 39));
@@ -293,26 +315,27 @@ internal sealed class PluginManagerForm : Form
         themeButton.Click += delegate { ToggleTheme(); };
         installButton = MakeButton("安装 ZIP", Color.FromArgb(17, 24, 39), Color.White);
         installButton.Click += delegate { InstallPlugin(); };
-        checkUpdatesButton = MakeButton("检查更新", Color.FromArgb(17, 24, 39), Color.White);
-        checkUpdatesButton.Click += delegate { CheckPluginUpdates(); };
-        rescanButton = MakeButton("重新扫描", Color.FromArgb(241, 245, 249), Color.FromArgb(17, 24, 39));
-        rescanButton.Click += delegate { Rescan(); };
-        detectVersionButton = MakeButton("检测版本", Color.FromArgb(241, 245, 249), Color.FromArgb(17, 24, 39));
-        detectVersionButton.Click += delegate { DetectCoreVersion(); };
         FlowLayoutPanel headerActions = new FlowLayoutPanel
         {
-            Dock = DockStyle.Right, Width = 480, Padding = new Padding(8, 26, 8, 0),
+            Dock = DockStyle.Right, Width = 145, Padding = new Padding(8, 27, 8, 0),
             FlowDirection = FlowDirection.LeftToRight, WrapContents = false, BackColor = Color.Transparent
         };
-        installButton.Margin = new Padding(3, 0, 8, 0);
-        checkUpdatesButton.Margin = new Padding(3, 0, 8, 0);
-        rescanButton.Margin = new Padding(3, 0, 8, 0);
-        detectVersionButton.Margin = new Padding(3, 0, 0, 0);
+        installButton.Margin = new Padding(3, 0, 0, 0);
         headerActions.Controls.Add(installButton);
-        headerActions.Controls.Add(checkUpdatesButton);
-        headerActions.Controls.Add(detectVersionButton);
-        headerActions.Controls.Add(rescanButton);
-        header.Controls.Add(title); header.Controls.Add(subtitle); header.Controls.Add(themeButton); header.Controls.Add(headerActions);
+
+        projectButton = new GitHubButton
+        {
+            Text = "项目主页", Location = new Point(22, 72), Size = new Size(132, 27), Radius = 13,
+            FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(255, 255, 255), ForeColor = Color.FromArgb(71, 85, 105),
+            Font = new Font("Microsoft YaHei UI", 8.5F, FontStyle.Bold), Cursor = Cursors.Hand, TabStop = false,
+            Padding = new Padding(20, 0, 0, 0)
+        };
+        projectButton.FlatAppearance.BorderSize = 0;
+        projectButton.Click += delegate { OpenUrl(RepositoryUrl); };
+        RoundedPanel versionPill = new RoundedPanel { Location = new Point(162, 75), Size = new Size(70, 21), Radius = 10, BackColor = Color.FromArgb(241, 245, 249) };
+        Label managerVersionLabel = new Label { Dock = DockStyle.Fill, Text = "v" + ManagerVersion, TextAlign = ContentAlignment.MiddleCenter, Font = new Font("Microsoft YaHei UI", 7.3F, FontStyle.Regular), ForeColor = Color.FromArgb(100, 116, 139), BackColor = Color.Transparent };
+        versionPill.Controls.Add(managerVersionLabel);
+        header.Controls.Add(title); header.Controls.Add(subtitle); header.Controls.Add(projectButton); header.Controls.Add(versionPill); header.Controls.Add(themeButton); header.Controls.Add(headerActions);
 
         Panel info = new Panel { Dock = DockStyle.Top, Height = 62, BackColor = Color.Transparent };
         RoundedPanel installedBlock = CreateStatBlock("已安装", Color.FromArgb(241, 245, 249), out installedValue);
@@ -328,26 +351,7 @@ internal sealed class PluginManagerForm : Form
         cards = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = false, FlowDirection = FlowDirection.TopDown, Padding = new Padding(12, 6, 8, 12), BackColor = Color.Transparent };
         cards.SizeChanged += delegate { ResizeCards(); };
 
-        Panel footer = new Panel { Dock = DockStyle.Bottom, Height = 66, BackColor = Color.Transparent };
-        projectButton = MakeButton("●  项目主页", Color.FromArgb(255, 255, 255), Color.FromArgb(71, 85, 105));
-        projectButton.Size = new Size(168, 32);
-        projectButton.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
-        projectButton.Click += delegate { OpenUrl(RepositoryUrl); };
-        RoundedPanel versionPill = new RoundedPanel { Size = new Size(168, 18), Radius = 9, BackColor = Color.FromArgb(241, 245, 249) };
-        Label managerVersionLabel = new Label { Dock = DockStyle.Fill, Text = "v" + ManagerVersion, TextAlign = ContentAlignment.MiddleCenter, Font = new Font("Microsoft YaHei UI", 7.3F, FontStyle.Regular), ForeColor = Color.FromArgb(100, 116, 139), BackColor = Color.Transparent };
-        versionPill.Controls.Add(managerVersionLabel);
-        footer.Controls.Add(projectButton);
-        footer.Controls.Add(versionPill);
-        footer.SizeChanged += delegate
-        {
-            int left = Math.Max(8, (footer.ClientSize.Width - projectButton.Width) / 2);
-            projectButton.Location = new Point(left, 4);
-            versionPill.Location = new Point(left, 41);
-        };
-        projectButton.Location = new Point((ClientSize.Width - projectButton.Width) / 2, 4);
-        versionPill.Location = new Point(projectButton.Left, 41);
-
-        Controls.Add(cards); Controls.Add(footer); Controls.Add(info); Controls.Add(header);
+        Controls.Add(cards); Controls.Add(info); Controls.Add(header);
 
         startupTimer = new System.Windows.Forms.Timer { Interval = 500 };
         startupTimer.Tick += CheckStartup;
@@ -783,7 +787,7 @@ internal sealed class PluginManagerForm : Form
         string healthText = HealthText(plugin);
         RoundedPanel healthBlock = new RoundedPanel { Location = new Point(18, 94), Size = new Size(122, 30), Radius = 12, BorderColor = Color.FromArgb(90, 255, 255, 255), BackColor = HealthBackground(healthText) };
         Label health = new Label { Text = healthText, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, Font = new Font("Microsoft YaHei UI", 8.5F, FontStyle.Bold), ForeColor = HealthForeground(healthText), BackColor = Color.Transparent };
-        RoundedPanel actionBlock = new RoundedPanel { Location = new Point(card.Width - 362, 91), Size = new Size(344, 36), Anchor = AnchorStyles.Top | AnchorStyles.Right, Radius = 14, BackColor = Color.FromArgb(95, 255, 255, 255) };
+        RoundedPanel actionBlock = new RoundedPanel { Location = new Point(card.Width - 286, 91), Size = new Size(268, 36), Anchor = AnchorStyles.Top | AnchorStyles.Right, Radius = 14, BackColor = Color.FromArgb(95, 255, 255, 255) };
         FlowLayoutPanel actions = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(4, 3, 4, 0), FlowDirection = FlowDirection.RightToLeft, WrapContents = false, BackColor = Color.Transparent };
         if (!installed)
         {
@@ -793,13 +797,11 @@ internal sealed class PluginManagerForm : Form
         }
         else
         {
-            Button healthButton = ActionButton("健康检查", delegate { ShowHealth(plugin); });
-            Button logsButton = ActionButton("查看日志", delegate { ShowLogs(plugin); });
-            Button upgradeButton = hasUpdate && updateCompatible
-                ? ActionButton("一键更新", delegate { UpdateFromRepository(plugin); })
-                : ActionButton("升级 ZIP", delegate { Upgrade(plugin); });
+            Button moreButton = MoreButton(plugin);
             Button remove = ActionButton("卸载", delegate { Uninstall(plugin); }); remove.ForeColor = Color.FromArgb(17, 24, 39);
-            actions.Controls.Add(healthButton); actions.Controls.Add(logsButton); actions.Controls.Add(upgradeButton); actions.Controls.Add(remove);
+            actions.Controls.Add(moreButton);
+            if (hasUpdate && updateCompatible) actions.Controls.Add(ActionButton("一键更新", delegate { UpdateFromRepository(plugin); }));
+            actions.Controls.Add(remove);
         }
         toggle.ToggleChanged += delegate { ToggleInline(plugin, toggle, toggleLabel, health); };
         toggleBlock.Controls.Add(toggleLabel); toggleBlock.Controls.Add(toggle);
@@ -813,6 +815,25 @@ internal sealed class PluginManagerForm : Form
     {
         RoundedButton button = new RoundedButton { Text = text, AutoSize = true, Height = 29, Radius = 14, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(241, 245, 249), ForeColor = Color.FromArgb(17, 24, 39), Font = new Font("Microsoft YaHei UI", 8.3F, FontStyle.Regular), Cursor = Cursors.Hand };
         button.FlatAppearance.BorderSize = 0; button.Click += click; return button;
+    }
+
+    private Button MoreButton(Dictionary<string, object> plugin)
+    {
+        ContextMenuStrip menu = new ContextMenuStrip
+        {
+            ShowImageMargin = false,
+            Font = new Font("Microsoft YaHei UI", 8.8F, FontStyle.Regular),
+            Padding = new Padding(5),
+            BackColor = Color.White
+        };
+        menu.Items.Add("升级 ZIP", null, delegate { Upgrade(plugin); });
+        menu.Items.Add("查看日志", null, delegate { ShowLogs(plugin); });
+        menu.Items.Add("健康检查", null, delegate { ShowHealth(plugin); });
+        Button button = ActionButton("更多  ···", delegate(object sender, EventArgs eventArgs)
+        {
+            menu.Show((Control)sender, new Point(0, ((Control)sender).Height + 2));
+        });
+        return button;
     }
 
     private string HealthText(Dictionary<string, object> plugin)
@@ -1242,7 +1263,7 @@ private LocalVersionInfo InspectLocalVersions()
     private static bool Bool(Dictionary<string, object> value, string key) { object raw; return value != null && value.TryGetValue(key, out raw) && raw != null && Convert.ToBoolean(raw); }
     private int CardWidth() { return Math.Max(590, cards.ClientSize.Width - 38); }
     private void ResizeCards() { int width = CardWidth(); foreach (Control control in cards.Controls) if (control is Panel) control.Width = width; }
-    private void SetBusy(string message) { installButton.Enabled = false; checkUpdatesButton.Enabled = false; rescanButton.Enabled = false; status.Text = message; SetLightFore(status, Color.FromArgb(100, 116, 139)); UseWaitCursor = true; }
-    private void SetReady(string message) { installButton.Enabled = true; checkUpdatesButton.Enabled = true; rescanButton.Enabled = true; status.Text = message; SetLightFore(status, Color.FromArgb(17, 24, 39)); UseWaitCursor = false; }
+    private void SetBusy(string message) { installButton.Enabled = false; status.Text = message; SetLightFore(status, Color.FromArgb(100, 116, 139)); UseWaitCursor = true; }
+    private void SetReady(string message) { installButton.Enabled = true; status.Text = message; SetLightFore(status, Color.FromArgb(17, 24, 39)); UseWaitCursor = false; }
     private void ShowError(string message) { SetReady("连接或操作失败"); MessageBox.Show(this, message, "大雄插件管理", MessageBoxButtons.OK, MessageBoxIcon.Error); }
 }
