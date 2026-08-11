@@ -4,10 +4,12 @@
 
 ## 下载和安装
 
-1. 打开[大雄插件管理 v1.0.0 正式发行版](https://github.com/heyu1084916812/daxiong-canvas-plugins/releases/tag/plugin-manager-v1.0.0)。
+1. 打开[大雄插件管理 v1.1.0 正式发行版](https://github.com/heyu1084916812/daxiong-canvas-plugins/releases/tag/plugin-manager-v1.1.0)。
 2. 在“资源”中下载 `Daxiong-Plugin-Manager.exe`，不要下载 `Source code`。
 3. 把下载的 `Daxiong-Plugin-Manager.exe` 放进大雄无限画布主目录；如有需要，可以改名为 `大雄插件管理.exe`。
 4. 双击运行。
+
+窗口底部提供“项目主页”和当前版本号。每次启动都会在后台检查管理器新版；有新版时自动弹窗，确认后会下载、校验、替换并重新打开。
 
 请勿直接在浏览器下载目录或临时目录中运行。插件管理器需要与画布启动文件处于同一主目录。
 

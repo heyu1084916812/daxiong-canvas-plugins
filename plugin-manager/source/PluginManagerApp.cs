@@ -7,7 +7,9 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
@@ -25,6 +27,8 @@ internal static class PluginManagerProgram
         }
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
+        try { ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072; }
+        catch { }
         Application.Run(new PluginManagerForm(AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar), port));
     }
 }
@@ -228,6 +232,9 @@ internal sealed class SlideToggle : Control
 
 internal sealed class PluginManagerForm : Form
 {
+    private const string ManagerVersion = "1.1.0";
+    private const string RepositoryUrl = "https://github.com/heyu1084916812/daxiong-canvas-plugins";
+    private const string ReleasesApiUrl = "https://api.github.com/repos/heyu1084916812/daxiong-canvas-plugins/releases?per_page=30";
     private readonly string baseDir;
     private readonly int port;
     private readonly string apiRoot;
@@ -242,6 +249,7 @@ internal sealed class PluginManagerForm : Form
     private readonly Button rescanButton;
     private readonly Button detectVersionButton;
     private readonly Button themeButton;
+    private readonly Button projectButton;
     private readonly System.Windows.Forms.Timer startupTimer;
     private readonly string themePath;
     private readonly Dictionary<Control, Color> lightBackColors = new Dictionary<Control, Color>();
@@ -319,12 +327,172 @@ internal sealed class PluginManagerForm : Form
 
         cards = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = false, FlowDirection = FlowDirection.TopDown, Padding = new Padding(12, 6, 8, 12), BackColor = Color.Transparent };
         cards.SizeChanged += delegate { ResizeCards(); };
-        Controls.Add(cards); Controls.Add(info); Controls.Add(header);
+
+        Panel footer = new Panel { Dock = DockStyle.Bottom, Height = 66, BackColor = Color.Transparent };
+        projectButton = MakeButton("●  项目主页", Color.FromArgb(255, 255, 255), Color.FromArgb(71, 85, 105));
+        projectButton.Size = new Size(168, 32);
+        projectButton.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
+        projectButton.Click += delegate { OpenUrl(RepositoryUrl); };
+        RoundedPanel versionPill = new RoundedPanel { Size = new Size(168, 18), Radius = 9, BackColor = Color.FromArgb(241, 245, 249) };
+        Label managerVersionLabel = new Label { Dock = DockStyle.Fill, Text = "v" + ManagerVersion, TextAlign = ContentAlignment.MiddleCenter, Font = new Font("Microsoft YaHei UI", 7.3F, FontStyle.Regular), ForeColor = Color.FromArgb(100, 116, 139), BackColor = Color.Transparent };
+        versionPill.Controls.Add(managerVersionLabel);
+        footer.Controls.Add(projectButton);
+        footer.Controls.Add(versionPill);
+        footer.SizeChanged += delegate
+        {
+            int left = Math.Max(8, (footer.ClientSize.Width - projectButton.Width) / 2);
+            projectButton.Location = new Point(left, 4);
+            versionPill.Location = new Point(left, 41);
+        };
+        projectButton.Location = new Point((ClientSize.Width - projectButton.Width) / 2, 4);
+        versionPill.Location = new Point(projectButton.Left, 41);
+
+        Controls.Add(cards); Controls.Add(footer); Controls.Add(info); Controls.Add(header);
 
         startupTimer = new System.Windows.Forms.Timer { Interval = 500 };
         startupTimer.Tick += CheckStartup;
-        Shown += delegate { ConnectOrStart(); };
+        Shown += delegate { ConnectOrStart(); BeginManagerUpdateCheck(); };
         ApplyThemeTree(this);
+    }
+
+    private static void OpenUrl(string url)
+    {
+        try { Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true }); }
+        catch { }
+    }
+
+    private void BeginManagerUpdateCheck()
+    {
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            try
+            {
+                Dictionary<string, object> release = FindLatestManagerRelease();
+                if (release == null) return;
+                string latest = ValueText(release, "version");
+                Version currentVersion;
+                Version latestVersion;
+                if (!Version.TryParse(ManagerVersion, out currentVersion) || !Version.TryParse(latest, out latestVersion) || latestVersion <= currentVersion) return;
+                if (IsDisposed || !IsHandleCreated) return;
+                BeginInvoke(new Action(delegate { PromptManagerUpdate(release); }));
+            }
+            catch { }
+        });
+    }
+
+    private Dictionary<string, object> FindLatestManagerRelease()
+    {
+        HttpWebRequest request = (HttpWebRequest)WebRequest.Create(ReleasesApiUrl);
+        request.Method = "GET";
+        request.Timeout = 10000;
+        request.UserAgent = "Daxiong-Plugin-Manager/" + ManagerVersion;
+        request.Accept = "application/vnd.github+json";
+        string json;
+        using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+        using (StreamReader reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8)) json = reader.ReadToEnd();
+        object[] releases = new JavaScriptSerializer { MaxJsonLength = 16 * 1024 * 1024 }.DeserializeObject(json) as object[];
+        if (releases == null) return null;
+        foreach (object item in releases)
+        {
+            Dictionary<string, object> raw = item as Dictionary<string, object>;
+            if (raw == null || Bool(raw, "draft") || Bool(raw, "prerelease")) continue;
+            string tag = ValueText(raw, "tag_name");
+            const string prefix = "plugin-manager-v";
+            if (!tag.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+            object rawAssets;
+            object[] assets = raw.TryGetValue("assets", out rawAssets) ? rawAssets as object[] : null;
+            if (assets == null) continue;
+            foreach (object assetItem in assets)
+            {
+                Dictionary<string, object> asset = assetItem as Dictionary<string, object>;
+                if (asset == null || !ValueText(asset, "name").Equals("Daxiong-Plugin-Manager.exe", StringComparison.OrdinalIgnoreCase)) continue;
+                return new Dictionary<string, object>
+                {
+                    { "version", tag.Substring(prefix.Length) },
+                    { "download_url", ValueText(asset, "browser_download_url") },
+                    { "digest", ValueText(asset, "digest") },
+                    { "release_url", ValueText(raw, "html_url") }
+                };
+            }
+        }
+        return null;
+    }
+
+    private void PromptManagerUpdate(Dictionary<string, object> release)
+    {
+        string latest = ValueText(release, "version");
+        DialogResult answer = MessageBox.Show(this,
+            "发现新版插件管理器 v" + latest + "。\n\n当前版本：v" + ManagerVersion + "\n是否立即下载并自动更新？",
+            "插件管理器可以更新", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
+        if (answer != DialogResult.Yes) return;
+        DownloadManagerUpdate(release);
+    }
+
+    private void DownloadManagerUpdate(Dictionary<string, object> release)
+    {
+        SetBusy("正在下载插件管理器更新…");
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            string downloaded = null;
+            try
+            {
+                string updateDir = Path.Combine(baseDir, "data", "plugin-manager-updates");
+                Directory.CreateDirectory(updateDir);
+                downloaded = Path.Combine(updateDir, "Daxiong-Plugin-Manager-v" + ValueText(release, "version") + ".exe.download");
+                using (WebClient client = new WebClient())
+                {
+                    client.Headers[HttpRequestHeader.UserAgent] = "Daxiong-Plugin-Manager/" + ManagerVersion;
+                    client.DownloadFile(ValueText(release, "download_url"), downloaded);
+                }
+                string digest = ValueText(release, "digest");
+                string expected = digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase) ? digest.Substring(7) : "";
+                string actual = ComputeSha256(downloaded);
+                if (expected.Length != 64 || !expected.Equals(actual, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("新版文件的 SHA-256 校验失败，已停止更新。");
+                BeginInvoke(new Action(delegate { ScheduleManagerReplacement(downloaded, ValueText(release, "version")); }));
+            }
+            catch (Exception ex)
+            {
+                try { if (downloaded != null && File.Exists(downloaded)) File.Delete(downloaded); }
+                catch { }
+                if (!IsDisposed && IsHandleCreated) BeginInvoke(new Action(delegate
+                {
+                    SetReady("管理器更新失败");
+                    MessageBox.Show(this, "自动更新失败：" + ex.Message + "\n\n你也可以通过底部“项目主页”手动下载。", "插件管理器更新", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }));
+            }
+        });
+    }
+
+    private static string ComputeSha256(string path)
+    {
+        using (SHA256 sha = SHA256.Create())
+        using (FileStream stream = File.OpenRead(path))
+        {
+            byte[] hash = sha.ComputeHash(stream);
+            StringBuilder value = new StringBuilder(hash.Length * 2);
+            foreach (byte item in hash) value.Append(item.ToString("x2"));
+            return value.ToString();
+        }
+    }
+
+    private void ScheduleManagerReplacement(string downloaded, string latestVersion)
+    {
+        string currentExe = Application.ExecutablePath;
+        string script = Path.Combine(Path.GetDirectoryName(downloaded), "install-manager-update.cmd");
+        int processId = Process.GetCurrentProcess().Id;
+        string contents = "@echo off\r\nsetlocal\r\n:wait\r\ntasklist /FI \"PID eq " + processId + "\" 2>NUL | find \"" + processId + "\" >NUL\r\nif not errorlevel 1 (\r\n  timeout /t 1 /nobreak >NUL\r\n  goto wait\r\n)\r\ncopy /Y \"" + downloaded + "\" \"" + currentExe + "\" >NUL\r\nif errorlevel 1 goto cleanup\r\nstart \"\" \"" + currentExe + "\" --port=" + port + "\r\n:cleanup\r\ndel /Q \"" + downloaded + "\" >NUL 2>NUL\r\ndel /Q \"%~f0\" >NUL 2>NUL\r\n";
+        File.WriteAllText(script, contents, Encoding.Default);
+        MessageBox.Show(this, "新版 v" + latestVersion + " 已下载并通过安全校验。\n\n点击“确定”后管理器会自动关闭、完成替换并重新打开。", "准备安装更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
+            Arguments = "/c \"\"" + script + "\"\"",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WindowStyle = ProcessWindowStyle.Hidden
+        });
+        Close();
     }
 
     protected override void OnHandleCreated(EventArgs eventArgs)
