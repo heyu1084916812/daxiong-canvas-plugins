@@ -1,0 +1,43 @@
+{
+  "schema_version": 2,
+  "id": "long-image-node",
+  "name": "长图节点",
+  "description": "把画布中选中的图片拼接为完整长图，双击长图后在编辑器内拖动调整顺序",
+  "version": "1.2.0",
+  "author": "local",
+  "icon": "assets/icon.svg",
+  "min_core_version": "2026.08.04",
+  "max_core_version": null,
+  "requires_capabilities": [
+    "canvas.classic.v1",
+    "canvas.smart.v1",
+    "image.files.v1",
+    "host.storage.v1"
+  ],
+  "backend": {
+    "entry": "backend.py:create_plugin",
+    "route_prefix": "/api/plugins/long-image-node"
+  },
+  "frontend": {
+    "classic_canvas": {
+      "css": ["web/long-image.css"],
+      "js": ["web/long-image-core.js", "web/long-image-classic.js"]
+    },
+    "smart_canvas": {
+      "css": ["web/long-image.css"],
+      "js": ["web/long-image-core.js", "web/long-image-smart.js"]
+    }
+  },
+  "permissions": [
+    "read_project_images",
+    "write_output_images",
+    "read_canvas_state",
+    "write_canvas_state"
+  ],
+  "data_version": 1,
+  "data_migration": {
+    "strategy": "idempotent-metadata",
+    "from_versions": [0, 1],
+    "preserves_canvas_data": true
+  }
+}

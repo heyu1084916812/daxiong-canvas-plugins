@@ -1,0 +1,76 @@
+name: Publish plugins
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "plugins/**"
+      - "tools/build_releases.py"
+      - ".github/workflows/publish-plugins.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build validated plugin packages
+        run: python tools/build_releases.py --repository "$GITHUB_REPOSITORY"
+
+      - name: Publish immutable release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          jq -c '.plugins[]' build/releases/release-manifest.json | while read -r item; do
+            tag=$(echo "$item" | jq -r '.tag')
+            asset=$(echo "$item" | jq -r '.asset')
+            name=$(echo "$item" | jq -r '.name')
+            version=$(echo "$item" | jq -r '.version')
+            if gh release view "$tag" >/dev/null 2>&1; then
+              mkdir -p "build/existing/$tag"
+              gh release download "$tag" --pattern "$asset" --dir "build/existing/$tag"
+              if ! cmp -s "build/releases/$asset" "build/existing/$tag/$asset"; then
+                echo "Release $tag already exists but source content changed. Bump plugin.json version." >&2
+                exit 1
+              fi
+              echo "Release $tag already exists and matches the deterministic package."
+            else
+              gh release create "$tag" "build/releases/$asset" --title "$name v$version" --notes "大雄无限画布插件自动发布。"
+            fi
+          done
+
+      - name: Ensure updates branch exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/updates" >/dev/null 2>&1; then
+            main_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref='refs/heads/updates' -f sha="$main_sha"
+          fi
+
+      - name: Publish update catalog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          content=$(base64 -w 0 build/releases/plugins-index.json)
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/contents/plugins-index.json?ref=updates" --jq '.sha' 2>/dev/null || true)
+          if [ -n "$sha" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/plugins-index.json" -f message='Update plugin catalog' -f content="$content" -f branch='updates' -f sha="$sha"
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/plugins-index.json" -f message='Create plugin catalog' -f content="$content" -f branch='updates'
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin-release-packages
+          path: build/releases/

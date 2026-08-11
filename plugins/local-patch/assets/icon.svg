@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="局部提取与图像融合">
+  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#6d5dfc"/><stop offset="1" stop-color="#23b5d3"/></linearGradient></defs>
+  <rect width="64" height="64" rx="16" fill="url(#g)"/>
+  <path d="M18 14v8h-4v12h4v8h8v8h12v-4H26V34h-8V22h12v-8H18Zm28 8h-8v-8h-4v12h12v12H34v12h4v-8h8v-8h4V22h-4Z" fill="#fff"/>
+</svg>

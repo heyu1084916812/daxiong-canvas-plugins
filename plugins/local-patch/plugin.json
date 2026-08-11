@@ -1,0 +1,53 @@
+{
+  "schema_version": 2,
+  "id": "local-patch",
+  "name": "局部提取与图像融合",
+  "description": "提取原图局部区域，处理后无缝融合回原图",
+  "version": "2.7.1",
+  "author": "local",
+  "icon": "assets/icon.svg",
+  "min_core_version": "2026.07.13",
+  "max_core_version": null,
+  "requires_capabilities": [
+    "canvas.smart.v1",
+    "canvas.classic.v1",
+    "image.files.v1",
+    "plugin.websocket.v1"
+  ],
+  "backend": {
+    "entry": "backend.py:create_plugin",
+    "route_prefix": "/api/plugins/local-patch"
+  },
+  "frontend": {
+    "classic_canvas": {
+      "css": [
+        "web/local-patch-classic.css"
+      ],
+      "js": [
+        "web/local-patch-core.js",
+        "web/local-patch-classic.js"
+      ]
+    },
+    "smart_canvas": {
+      "css": [
+        "web/local-patch.css"
+      ],
+      "js": [
+        "web/local-patch-core.js",
+        "web/local-patch.js"
+      ]
+    }
+  },
+  "permissions": [
+    "read_project_images",
+    "write_output_images",
+    "read_canvas_state",
+    "write_canvas_state"
+  ],
+  "data_version": 1,
+  "data_migration": {
+    "strategy": "idempotent-metadata",
+    "from_versions": [0, 1],
+    "preserves_canvas_data": true
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "schema_version": 2,
+  "id": "canvas-agent",
+  "name": "设计大师",
+  "description": "在普通画布和智能画布中提供对话、分析、生成与多图任务编排",
+  "version": "2.2.48",
+  "author": "mufanmu / local migration",
+  "min_core_version": "2026.07.15",
+  "max_core_version": null,
+  "requires_capabilities": [
+    "canvas.classic.v1",
+    "canvas.smart.v1",
+    "image.files.v1",
+    "plugin.websocket.v1",
+    "llm.canvas.v1",
+    "tasks.canvas-image.v1"
+  ],
+  "backend": {
+    "entry": "backend.py:create_plugin",
+    "route_prefix": "/api/plugins/canvas-agent"
+  },
+  "frontend": {
+    "classic_canvas": {
+      "css": [
+        "web/canvas-agent.css"
+      ],
+      "js": [
+        "web/i18n.js",
+        "web/canvas-adapter-classic.js",
+        "web/input-state-machine.js",
+        "web/canvas-plan-executor.js",
+        "web/canvas-agent.js"
+      ]
+    },
+    "smart_canvas": {
+      "css": [
+        "web/canvas-agent.css"
+      ],
+      "js": [
+        "web/i18n.js",
+        "web/canvas-adapter.js",
+        "web/input-state-machine.js",
+        "web/canvas-plan-executor.js",
+        "web/canvas-agent.js"
+      ]
+    }
+  },
+  "permissions": [
+    "read_project_images",
+    "write_output_images",
+    "read_canvas_state",
+    "write_canvas_state",
+    "use_configured_models"
+  ],
+  "data_version": 1
+}

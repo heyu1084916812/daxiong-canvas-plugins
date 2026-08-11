@@ -1,0 +1,983 @@
+
+/* --- AI Agent 面板 --- */
+html[data-studio-scale="off"].studio-scale-managed .agent-toggle:not(.canvas-agent-classic-toggle) { zoom:var(--studio-ui-scale, 1); }
+.canvas-agent-send-selected { left:50%; right:auto; bottom:22px; transform:translateX(-50%); }
+.canvas-agent-send-selected:hover { transform:translateX(-50%) translateY(-1px); }
+/* 插件侧栏：固定贴右；开关在资产库右侧，不与原按钮重叠 */
+:root { --canvas-agent-dock-width: 380px; }
+/* 宿主顶栏原位置：资产22 / 日志130 / 快捷238 / 工作流346。为 Agent 腾出最右侧一格(+108) */
+body:not(.canvas-agent-dock-open) #assetToggle,
+html:not(.canvas-agent-dock-open) #assetToggle { right: 130px !important; }
+body:not(.canvas-agent-dock-open) #smartLogToggle,
+html:not(.canvas-agent-dock-open) #smartLogToggle { right: 238px !important; }
+body:not(.canvas-agent-dock-open) #smartShortcutToggle,
+html:not(.canvas-agent-dock-open) #smartShortcutToggle { right: 346px !important; }
+body:not(.canvas-agent-dock-open) #smartWorkflowToggle,
+html:not(.canvas-agent-dock-open) #smartWorkflowToggle { right: 454px !important; }
+/* 打开侧栏后恢复宿主原始 right（相对已收缩的 shell 右边缘） */
+body.canvas-agent-dock-open #assetToggle,
+html.canvas-agent-dock-open #assetToggle { right: 22px !important; transform: none !important; }
+body.canvas-agent-dock-open #smartLogToggle,
+html.canvas-agent-dock-open #smartLogToggle { right: 130px !important; transform: none !important; }
+body.canvas-agent-dock-open #smartShortcutToggle,
+html.canvas-agent-dock-open #smartShortcutToggle { right: 238px !important; transform: none !important; }
+body.canvas-agent-dock-open #smartWorkflowToggle,
+html.canvas-agent-dock-open #smartWorkflowToggle { right: 346px !important; transform: none !important; }
+
+.agent-toggle:not(.canvas-agent-classic-toggle){
+    position:absolute !important;
+    top:22px !important;
+    right:22px !important; /* 资产库右边 = 最右侧 */
+    left:auto !important;
+    z-index:56;
+    width:96px;
+    height:40px;
+    padding:0 12px;
+    border-radius:999px;
+    background:var(--panel);
+    color:var(--text);
+    border:1px solid var(--line);
+    box-shadow:0 14px 34px var(--shadow);
+    backdrop-filter:blur(16px);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:7px;
+    font-size:12px;
+    font-weight:750;
+    white-space:nowrap;
+    transition:transform .14s ease, border-color .14s ease, opacity .14s ease, visibility .14s ease;
+}
+.agent-toggle:hover { border-color:var(--text); transform:translateY(-1px); }
+.agent-toggle.active { background:var(--strong); color:var(--strong-text); border-color:var(--strong); box-shadow:0 16px 38px var(--shadow); }
+.agent-toggle i,.agent-toggle svg { width:16px; height:16px; }
+/* 侧栏打开时隐藏开关，避免和顶栏/侧栏重叠 */
+.agent-toggle.is-dock-hidden,
+html.canvas-agent-dock-open .agent-toggle:not(.canvas-agent-classic-toggle),
+body.canvas-agent-dock-open .agent-toggle:not(.canvas-agent-classic-toggle){
+    opacity:0 !important;
+    visibility:hidden !important;
+    pointer-events:none !important;
+    transform:none !important;
+}
+/* 侧栏本身：始终 fixed 贴视口右边 */
+.agent-panel{
+    position:fixed !important;
+    top:0 !important;
+    right:0 !important;
+    bottom:0 !important;
+    left:auto !important;
+    z-index:68 !important;
+    width:var(--canvas-agent-dock-width) !important;
+    max-width:min(720px, 55vw) !important;
+    min-height:0;
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+    padding:12px 12px 14px;
+    border-radius:0;
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-right:none;
+    border-top:none;
+    border-bottom:none;
+    box-shadow:-12px 0 40px rgba(15,23,42,.10);
+    /* 去掉重 blur，侧栏打开时少约一帧到一秒的合成开销 */
+    backdrop-filter:none;
+    overflow:hidden;
+    transform:translateX(104%);
+    opacity:0;
+    visibility:hidden;
+    pointer-events:none;
+    transition:opacity .12s ease, transform .12s ease, visibility .12s ease;
+    box-sizing:border-box;
+    contain:layout paint style;
+    font-size:14px;
+}
+.agent-panel.open{
+    opacity:1 !important;
+    visibility:visible !important;
+    pointer-events:auto !important;
+    transform:translateX(0) !important;
+}
+
+.agent-panel > .asset-head { justify-content:flex-start; gap:4px; }
+.agent-panel > .asset-head > .asset-title { margin-right:auto; }
+.agent-panel > .asset-head > .asset-mini-btn,
+.agent-panel > .asset-head > .agent-more-wrap { flex:0 0 auto; }
+.agent-skill-zone { display:flex; flex-direction:column; gap:6px; }
+.agent-skill-drop { min-height:44px; border:1px dashed var(--line); border-radius:13px; display:flex; align-items:center; justify-content:center; gap:7px; text-align:center; padding:8px; color:var(--faint); font-size:10.5px; font-weight:600; background:var(--soft); cursor:pointer; transition:border-color .14s ease, color .14s ease, background .14s ease; }
+.agent-skill-drop:hover { border-color:var(--strong); color:var(--text); }
+.agent-skill-drop.drag-over { border-color:var(--strong); color:var(--text); background:var(--card); }
+.agent-skill-drop i,.agent-skill-drop svg { width:14px; height:14px; }
+.agent-skill-card { display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:12px; border:1px solid var(--line); background:var(--card); }
+.agent-skill-card > i,.agent-skill-card > svg { width:15px; height:15px; color:var(--strong); flex:0 0 auto; }
+.agent-skill-meta { flex:1; min-width:0; }
+.agent-skill-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; font-weight:750; color:var(--text); }
+.agent-skill-size { font-size:9.5px; font-weight:600; color:var(--faint); }
+.agent-models { display:flex; flex-direction:column; gap:6px; padding:9px; border-radius:13px; background:var(--soft); border:1px solid var(--line); }
+.agent-model-row { display:flex; align-items:center; gap:5px; }
+.agent-model-label { flex:0 0 52px; font-size:10px; font-weight:750; color:var(--muted); }
+.agent-select { min-width:0; flex:1; height:28px; border-radius:9px; border:1px solid var(--line); background:var(--card); color:var(--text); padding:0 6px; font-size:10.5px; outline:none; }
+.agent-select:focus { border-color:var(--strong); }
+.agent-autocontext { display:flex; align-items:center; gap:6px; font-size:10px; font-weight:650; color:var(--muted); cursor:pointer; user-select:none; }
+.agent-autocontext input { accent-color:var(--strong); }
+.agent-messages { min-height:0; flex:1 1 0; overflow-x:hidden; overflow-y:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; display:flex; flex-direction:column; gap:10px; padding:4px 4px 8px 2px; scrollbar-width:thin; scrollbar-color:rgba(148,163,184,.42) transparent; }
+.agent-messages > * { flex:0 0 auto; max-width:100%; }
+.agent-messages::-webkit-scrollbar { width:7px; }
+.agent-messages::-webkit-scrollbar-thumb { background:rgba(148,163,184,.42); border-radius:999px; border:2px solid transparent; background-clip:content-box; }
+.agent-chat-list-panel { position:absolute; top:46px; left:12px; right:12px; max-height:300px; overflow-y:auto; border-radius:13px; border:1px solid var(--line); background:var(--card); box-shadow:0 8px 32px rgba(15,23,42,.14); z-index:70; padding:6px; display:flex; flex-direction:column; gap:2px; }
+.agent-chat-list-panel[hidden] { display:none; }
+.agent-chat-item { display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:9px; border:none; background:none; color:var(--text); font-size:10.5px; font-weight:650; cursor:pointer; text-align:left; transition:background .14s ease; }
+.agent-chat-item:hover { background:var(--soft); }
+.agent-chat-item.active { background:var(--soft); font-weight:750; }
+.agent-chat-item-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.agent-chat-item-time { flex:0 0 auto; font-size:9px; color:var(--faint); white-space:nowrap; }
+.agent-chat-item-delete { flex:0 0 auto; width:20px; height:20px; border-radius:6px; border:none; background:none; color:var(--faint); cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; }
+.agent-chat-item-delete:hover { color:#ef4444; background:rgba(239,68,68,.1); }
+.agent-chat-item-delete i,.agent-chat-item-delete svg { width:11px; height:11px; }
+.agent-chat-empty { padding:16px; text-align:center; font-size:10.5px; color:var(--faint); }
+
+/* 消息选项按钮 */
+.agent-msg-options { display:flex; flex-direction:column; gap:6px; margin-top:6px; align-items:stretch; }
+.agent-msg-option-btn { min-height:28px; height:auto; padding:6px 12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:10.5px; font-weight:700; cursor:pointer; text-align:left; white-space:normal; word-break:break-word; line-height:1.4; transition:border-color .14s ease, background .14s ease; }
+.agent-msg-option-btn:hover { border-color:var(--strong); background:var(--soft); }
+
+/* 思维模式开关按钮 */
+.agent-tooltip-title { font-size:12px; font-weight:700; }
+.agent-tooltip-sub { font-size:10px; opacity:.7; margin-top:3px; }
+
+/* 思维模式提示词确认卡片 */
+.agent-prompt-card {
+    margin-top:6px; border:1px solid var(--line); border-radius:10px;
+    background:var(--card); overflow:hidden;
+    width:100%; min-width:0; box-sizing:border-box;
+}
+.agent-prompt-card-header {
+    padding:5px 10px; font-size:10px; font-weight:700; color:var(--muted);
+    background:var(--soft); display:flex; align-items:center; gap:4px;
+}
+.agent-prompt-card-body {
+    padding:8px 10px; font-size:11px; line-height:1.5; color:var(--text);
+    word-break:break-word; white-space:pre-wrap;
+    max-height:min(260px, 40vh); overflow-y:auto;
+    scrollbar-width:thin; scrollbar-color:rgba(148,163,184,.42) transparent;
+}
+.agent-prompt-card-actions { display:flex; gap:4px; padding:6px 8px; min-width:0; width:100%; box-sizing:border-box; }
+.agent-prompt-btn {
+    flex:1 1 0; min-width:0; min-height:26px; padding:4px 6px; border-radius:6px;
+    border:1px solid var(--line); background:var(--card); color:var(--text);
+    font-size:10px; font-weight:650; cursor:pointer; text-align:center;
+    transition:border-color .14s ease, background .14s ease; white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis;
+}
+.agent-prompt-btn:hover { border-color:var(--muted); background:var(--soft); }
+.agent-prompt-btn.primary { background:var(--strong); color:var(--strong-text); border-color:var(--strong); }
+.agent-prompt-btn.primary:hover { opacity:.88; }
+.agent-prompt-edit-area {
+    width:100%; min-width:0; box-sizing:border-box; min-height:60px; max-height:200px; margin:0;
+    padding:8px 10px; border:none; border-top:1px solid var(--line);
+    background:var(--card); color:var(--text);
+    font-size:11px; line-height:1.5; resize:vertical;
+    font-family:inherit; outline:none; word-break:break-word; white-space:pre-wrap;
+}
+.agent-prompt-edit-area:focus { background:var(--soft); }
+.agent-prompt-list { display:flex; flex-direction:column; }
+.agent-prompt-list-item { border-bottom:1px solid var(--line); }
+.agent-prompt-list-item:last-child { border-bottom:none; }
+.agent-prompt-list-item.confirmed, .agent-prompt-list-item.skipped { cursor:pointer; opacity:.7; transition:opacity .14s ease; }
+.agent-prompt-list-item.confirmed:hover, .agent-prompt-list-item.skipped:hover { opacity:1; }
+.agent-prompt-list-item.pending { opacity:.45; }
+.agent-prompt-list-header {
+    display:flex; align-items:center; gap:5px; padding:5px 10px;
+    font-size:10.5px; line-height:1.4;
+}
+.agent-prompt-list-icon { font-size:11px; font-weight:700; flex-shrink:0; }
+.agent-prompt-list-item.confirmed .agent-prompt-list-icon { color:#16a34a; }
+.agent-prompt-list-item.skipped .agent-prompt-list-icon { color:var(--faint); }
+.agent-prompt-list-item.current .agent-prompt-list-icon { color:var(--strong); }
+.agent-prompt-list-index { font-weight:650; color:var(--muted); flex-shrink:0; font-size:9.5px; }
+.agent-prompt-list-text { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text); }
+.agent-prompt-item-actions { display:flex; gap:4px; padding:4px 8px 6px; min-width:0; width:100%; box-sizing:border-box; }
+.agent-prompt-card-footer { display:flex; gap:4px; padding:6px 8px; border-top:1px solid var(--line); background:var(--soft); min-width:0; width:100%; box-sizing:border-box; }
+.agent-prompt-confirm-all { flex:2; }
+.agent-prompt-cancel-all { flex:1; }
+.agent-msg-free-hint { margin-top:4px; font-size:9.5px; opacity:.45; }
+
+/* 消息操作按钮 */
+.agent-msg-actions { display:flex; gap:2px; opacity:0; transition:opacity .14s ease; }
+.agent-msg:hover .agent-msg-actions { opacity:1; }
+.agent-msg-action-btn { width:22px; height:22px; border-radius:6px; border:none; background:none; color:var(--faint); cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; transition:color .14s ease, background .14s ease; }
+.agent-msg-action-btn:hover { color:var(--text); background:var(--soft); }
+.agent-msg-action-btn i,.agent-msg-action-btn svg { width:11px; height:11px; }
+
+.agent-empty { margin:auto; text-align:center; color:var(--faint); font-size:11px; line-height:1.7; padding:20px 12px; }
+.agent-empty i,.agent-empty svg { width:26px; height:26px; display:block; margin:0 auto 8px; }
+.agent-empty-skills { width:100%; max-width:330px; color:var(--text); }
+.agent-empty-skills > strong,.agent-empty-image > strong { display:block; margin-bottom:14px; font-size:15px; }
+.agent-empty-skill-grid { display:flex; flex-wrap:wrap; justify-content:center; gap:8px; }
+.agent-empty-skill { max-width:100%; min-height:36px; display:inline-flex; align-items:center; gap:6px; padding:7px 12px; border:1px solid var(--line); border-radius:999px; background:var(--card); color:var(--text); font-size:12.5px; font-weight:650; cursor:pointer; }
+.agent-empty-skill:hover { border-color:#a78bfa; background:#f5f3ff; color:#5b21b6; }
+.agent-empty-skill i,.agent-empty-skill svg { width:14px; height:14px; margin:0; color:#7c3aed; }
+.agent-empty-skill.all i,.agent-empty-skill.all svg { color:var(--muted); }
+.agent-empty-image { max-width:280px; display:flex; flex-direction:column; align-items:center; color:var(--muted); font-size:13px; }
+.agent-empty-image > i,.agent-empty-image > svg { color:#7c3aed; }
+.agent-msg { display:flex; flex-direction:column; gap:5px; max-width:min(92%, 100%); min-width:0; flex:0 0 auto; flex-shrink:0; overflow:hidden; }
+.agent-msg.user { align-self:flex-end; align-items:flex-end; }
+.agent-msg.assistant { align-self:flex-start; align-items:flex-start; }
+.agent-msg-bubble { padding:8px 11px; border-radius:14px; font-size:11.5px; line-height:1.55; white-space:pre-wrap; word-break:break-word; }
+.agent-msg.user .agent-msg-bubble { background:var(--strong); color:var(--strong-text); border-bottom-right-radius:5px; }
+.agent-msg.assistant .agent-msg-bubble { background:var(--card); color:var(--text); border:1px solid var(--line); border-bottom-left-radius:5px; }
+.agent-msg-thumbs { display:grid; grid-template-columns:repeat(3, 1fr); gap:5px; max-width:240px; }
+.agent-msg-thumbs img { width:100%; aspect-ratio:1/1; object-fit:cover; border-radius:9px; border:1px solid var(--line); cursor:pointer; display:block; }
+.agent-gen-thumb-wrap { position:relative; }
+.agent-gen-img-num { position:absolute; top:3px; left:3px; min-width:15px; height:15px; border-radius:4px; background:var(--strong); color:#fff; font-size:9px; font-weight:600; line-height:15px; text-align:center; padding:0 3px; z-index:2; pointer-events:none; }
+.agent-gen-card { width:250px; max-width:100%; min-width:0; box-sizing:border-box; border-radius:12px; border:1px solid var(--line); background:var(--card); padding:8px 10px; display:flex; flex-direction:column; gap:6px; overflow:hidden; }
+.agent-execution-prompts { width:100%; max-width:320px; border:1px solid var(--line); border-radius:11px; background:var(--card); overflow:hidden; }
+.agent-execution-prompts > summary { min-height:38px; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:7px 10px; color:var(--text); font-size:12.5px; font-weight:750; cursor:pointer; list-style:none; }
+.agent-execution-prompts > summary::-webkit-details-marker { display:none; }
+.agent-execution-prompts > summary > span { display:flex; align-items:center; gap:6px; }
+.agent-execution-prompts > summary i,.agent-execution-prompts > summary svg { width:14px; height:14px; color:#7c3aed; }
+.agent-execution-prompts > summary small { color:var(--faint); font-size:11px; font-weight:650; }
+.agent-execution-prompts-body { max-height:min(360px, 45vh); overflow:auto; border-top:1px solid var(--line); }
+.agent-execution-prompt-item { padding:10px 11px; border-bottom:1px solid var(--line); }
+.agent-execution-prompt-item:last-child { border-bottom:0; }
+.agent-execution-prompt-title { margin-bottom:5px; color:var(--muted); font-size:12px; font-weight:800; }
+.agent-execution-prompt-text { color:var(--text); font-size:13px; line-height:1.6; white-space:pre-wrap; word-break:break-word; }
+.agent-gen-prompt { font-size:10px; color:var(--muted); line-height:1.45; position:relative; max-width:100%; min-width:0; overflow-wrap:anywhere; word-break:break-word; }
+.agent-gen-prompt-collapsed { display:-webkit-box; -webkit-line-clamp:5; -webkit-box-orient:vertical; overflow:hidden; }
+.agent-gen-prompt-expanded { /* 展开后不截断 */ }
+.agent-gen-prompt-toggle { display:inline-block; margin-left:4px; padding:0 2px; border:none; background:none; color:var(--strong); font-size:10px; font-weight:700; cursor:pointer; vertical-align:baseline; white-space:nowrap; }
+.agent-gen-prompt-toggle:hover { text-decoration:underline; }
+.agent-gen-status { display:flex; align-items:flex-start; flex-wrap:wrap; gap:6px; font-size:10px; font-weight:750; color:var(--muted); max-width:100%; min-width:0; }
+.agent-gen-status.error { color:#e11d48; }
+.agent-gen-status > span { min-width:0; max-width:100%; overflow-wrap:anywhere; word-break:break-word; }
+.agent-gen-error { font-size:10px; color:var(--muted); line-height:1.45; max-width:100%; min-width:0; overflow-wrap:anywhere; word-break:break-word; white-space:pre-wrap; }
+.agent-gen-status.done { color:#059669; }
+.agent-gen-spinner { width:12px; height:12px; border-radius:50%; border:2px solid var(--line); border-top-color:var(--strong); animation:agentSpin .8s linear infinite; flex:0 0 auto; }
+@keyframes agentSpin { to { transform:rotate(360deg); } }
+
+/* 生成后快捷操作栏 */
+.agent-quick-btn { display:inline-flex; align-items:center; gap:3px; height:24px; padding:0 8px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--muted); font-size:10px; font-weight:600; cursor:pointer; transition:all .14s ease; white-space:nowrap; }
+.agent-quick-btn:hover { color:var(--text); border-color:var(--strong); background:var(--soft); }
+.agent-quick-btn.primary { background:var(--strong); color:var(--strong-text); border-color:var(--strong); }
+.agent-quick-btn.primary:hover { opacity:.85; }
+.agent-quick-btn i,.agent-quick-btn svg { width:11px; height:11px; }
+
+/* 分析结果卡片 */
+.agent-analysis-card { width:100%; max-width:320px; border-radius:12px; border:1px solid var(--line); background:var(--card); overflow:hidden; }
+.agent-analysis-body { padding:10px 12px; font-size:11px; line-height:1.6; color:var(--text); white-space:pre-wrap; word-break:break-word; max-height:200px; overflow-y:auto; }
+.agent-analysis-actions { display:flex; gap:6px; padding:8px 10px; border-top:1px solid var(--line); background:var(--soft); }
+
+/* 提示词建议卡片 */
+.agent-prompt-suggest-card { width:100%; max-width:320px; border-radius:12px; border:1px solid var(--line); background:var(--card); overflow:hidden; }
+.agent-prompt-suggest-body { padding:10px 12px; font-size:11px; line-height:1.6; color:var(--text); white-space:pre-wrap; word-break:break-word; font-family:'SF Mono',Menlo,monospace; max-height:200px; overflow-y:auto; background:var(--soft); }
+
+/* 降级提示条 */
+.agent-degrade-notice { display:flex; align-items:center; gap:6px; padding:6px 10px; border-radius:8px; background:#fef3c7; border:1px solid #f59e0b; font-size:10px; color:#92400e; margin-bottom:6px; }
+.agent-degrade-notice i,.agent-degrade-notice svg { width:12px; height:12px; flex-shrink:0; }
+
+/* 流式输出气泡 */
+.agent-stream-bubble { position:relative; }
+.agent-stream-body { font-size:11.5px; line-height:1.6; white-space:pre-wrap; word-break:break-word; max-height:200px; overflow-y:auto; scroll-behavior:smooth; }
+.agent-stream-stop { position:absolute; top:4px; right:4px; width:20px; height:20px; border-radius:5px; border:1px solid var(--line); background:var(--card); color:var(--muted); font-size:9px; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all .14s ease; }
+.agent-stream-stop:hover { color:#e11d48; border-color:#e11d48; background:#fef2f2; }
+
+.agent-input-area { display:flex; flex-direction:column; gap:0; position:relative; flex:0 0 auto; min-height:0; max-height:min(46vh, 420px); }
+.agent-onebox { border:1px solid var(--line); border-radius:16px; background:var(--card); transition:border-color .14s ease; }
+.agent-onebox:focus-within { border-color:var(--strong); }
+.agent-onebox.is-ghost-pending { border-style:dashed; border-color:#94a3b8; }
+.agent-onebox.is-ghost-pending .agent-input-editor { caret-color: transparent; }
+.agent-onebox.is-ghost-pending .agent-input-editor:empty:before { color:#94a3b8; }
+.agent-attach-row { display:flex; flex-wrap:wrap; gap:6px; padding:8px 10px 0; }
+.agent-attach-row:empty { display:none; }
+.agent-attach-chip { position:relative; width:44px; height:44px; border-radius:10px; overflow:hidden; border:1px solid var(--line); cursor:pointer; transition:border-color .14s ease; }
+.agent-attach-chip:hover { border-color:var(--strong); }
+.agent-attach-chip img { width:100%; height:100%; object-fit:cover; display:block; }
+.agent-att-num { position:absolute; top:2px; left:2px; min-width:14px; height:14px; border-radius:4px; background:var(--strong); color:#fff; font-size:9px; font-weight:600; line-height:14px; text-align:center; padding:0 3px; z-index:2; pointer-events:none; }
+.agent-attach-chip button { position:absolute; top:2px; right:2px; width:15px; height:15px; border-radius:50%; background:rgba(15,23,42,.78); color:#fff; display:flex; align-items:center; justify-content:center; border:none; cursor:pointer; padding:0; opacity:0; transition:opacity .12s ease; }
+.agent-attach-chip:hover button { opacity:1; }
+.agent-attach-chip button i,.agent-attach-chip button svg { width:9px; height:9px; }
+.agent-attach-chip.dragging { opacity:.4; }
+.agent-attach-chip.drop-before { box-shadow:-2px 0 0 0 var(--strong); }
+.agent-attach-chip.drop-after { box-shadow:2px 0 0 0 var(--strong); }
+.agent-ref-confirm { position:absolute; bottom:100%; left:0; right:0; margin-bottom:6px; background:var(--card); border:1px solid var(--line); border-radius:14px; box-shadow:0 -4px 24px rgba(0,0,0,.12); z-index:50; max-height:280px; display:flex; flex-direction:column; }
+.agent-ref-confirm[hidden] { display:none; }
+.agent-ref-confirm-head { display:flex; align-items:center; justify-content:space-between; padding:10px 14px 6px; border-bottom:1px solid var(--line); }
+.agent-ref-confirm-title { font-size:12px; font-weight:600; color:var(--text); }
+.agent-ref-confirm-close { width:22px; height:22px; border-radius:6px; border:none; background:none; color:var(--muted); cursor:pointer; display:flex; align-items:center; justify-content:center; }
+.agent-ref-confirm-close:hover { color:var(--text); background:var(--soft); }
+.agent-ref-confirm-close i,.agent-ref-confirm-close svg { width:13px; height:13px; }
+.agent-ref-confirm-body { flex:1; overflow-y:auto; padding:8px 14px; }
+.agent-ref-confirm-task { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--line); }
+.agent-ref-confirm-task:last-child { border-bottom:none; }
+.agent-ref-confirm-task-num { min-width:20px; height:20px; border-radius:10px; background:var(--soft); color:var(--strong); font-size:10px; font-weight:600; line-height:20px; text-align:center; }
+.agent-ref-confirm-task-refs { display:flex; gap:3px; flex-wrap:wrap; }
+.agent-ref-confirm-task-ref { min-width:18px; height:18px; border-radius:9px; background:rgba(59,130,246,.12); color:#3b82f6; font-size:9px; font-weight:600; line-height:18px; text-align:center; padding:0 4px; }
+.agent-ref-confirm-task-prompt { flex:1; font-size:10px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.agent-ref-confirm-task-mode { font-size:9px; padding:1px 6px; border-radius:4px; font-weight:500; }
+.agent-ref-confirm-task-mode.split { background:rgba(34,197,94,.12); color:#22c55e; }
+.agent-ref-confirm-task-mode.combine { background:rgba(249,115,22,.12); color:#f97316; }
+.agent-ref-confirm-task-mode.single { background:rgba(99,102,241,.12); color:#6366f1; }
+.agent-ref-confirm-actions { display:flex; gap:8px; padding:8px 14px 10px; border-top:1px solid var(--line); }
+.agent-ref-confirm-btn { flex:1; height:32px; border-radius:8px; border:none; font-size:12px; font-weight:500; cursor:pointer; transition:opacity .14s ease; }
+.agent-ref-confirm-btn.primary { background:var(--strong); color:#fff; }
+.agent-ref-confirm-btn.primary:hover { opacity:.88; }
+.agent-ref-confirm-btn.secondary { background:var(--soft); color:var(--text); }
+.agent-ref-confirm-btn.secondary:hover { opacity:.88; }
+.agent-onebox textarea { display:block; width:100%; min-width:0; resize:none; max-height:200px; border:none; background:transparent; color:var(--text); padding:8px 12px; font-size:11.5px; line-height:1.5; outline:none; font-family:inherit; }
+/* Lovart-style inline image tokens in composer */
+.agent-onebox .agent-input-editor {
+    display:block;
+    width:100%;
+    min-width:0;
+    min-height:56px;
+    max-height:min(34vh, 280px);
+    overflow-y:auto;
+    border:none;
+    background:transparent;
+    color:var(--text);
+    padding:12px 14px 10px;
+    font-size:13px;
+    line-height:1.7;
+    outline:none;
+    font-family:inherit;
+    white-space:pre-wrap;
+    word-break:break-word;
+    box-sizing:border-box;
+    transition:height .08s ease;
+}
+.agent-onebox .agent-input-editor.is-ghost-pending {
+    caret-color: transparent;
+    cursor: default;
+}
+.agent-onebox.is-ghost-pending {
+    background: linear-gradient(180deg, rgba(148,163,184,.06), transparent 42%), var(--card);
+}
+.agent-onebox .agent-input-editor:empty:before {
+    content:attr(data-placeholder);
+    color:var(--faint);
+    pointer-events:none;
+}
+.agent-onebox .agent-input-editor:focus {
+    outline:none;
+}
+.agent-inline-chip {
+    position:relative;
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+    max-width:132px;
+    height:24px;
+    margin:0 3px;
+    padding:0 8px 0 3px;
+    border-radius:999px;
+    border:1px solid var(--line);
+    vertical-align:middle;
+    overflow:hidden;
+    cursor:pointer;
+    user-select:none;
+    background:#f8fafc;
+    color:var(--text);
+    box-shadow:0 0 0 1px rgba(15,23,42,.02);
+}
+.agent-inline-chip img {
+    width:18px;
+    height:18px;
+    border-radius:50%;
+    object-fit:cover;
+    display:block;
+    flex:0 0 auto;
+    pointer-events:none;
+    background:#e2e8f0;
+}
+.agent-inline-chip .agent-inline-label {
+    max-width:88px;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+    font-size:11px;
+    font-weight:650;
+    line-height:1;
+    pointer-events:none;
+}
+.agent-inline-chip .agent-inline-x {
+    position:absolute;
+    right:2px;
+    top:50%;
+    transform:translateY(-50%);
+    width:14px;
+    height:14px;
+    border:none;
+    border-radius:50%;
+    background:rgba(15,23,42,.72);
+    color:#fff;
+    font-size:10px;
+    line-height:14px;
+    padding:0;
+    cursor:pointer;
+    display:none;
+}
+.agent-inline-chip:hover { padding-right:18px; }
+.agent-inline-chip:hover .agent-inline-x { display:block; }
+.agent-inline-chip.is-ghost {
+    opacity:.48;
+    filter:grayscale(.08);
+    border-style:dashed;
+    border-color:#94a3b8;
+    background:rgba(148,163,184,.12);
+    cursor:default;
+}
+.agent-inline-chip.is-ghost .agent-inline-x { display:none; }
+.agent-inline-chip.is-ghost:hover { padding-right:8px; }
+/* 上方图片缩略图附件行已废弃，仅保留 skill 条 */
+.agent-attach-chip { display:none !important; }
+.agent-onebox textarea { display:none; }
+
+.agent-toolbar { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:4px 8px 7px; }
+.agent-toolbar-left { display:flex; align-items:center; gap:6px; min-width:0; flex:1; }
+.agent-toolbar-right { display:flex; align-items:center; gap:6px; flex:0 0 auto; }
+.agent-input-mode-switch { display:inline-flex; align-items:center; flex:0 0 auto; padding:2px; border:1px solid var(--line); border-radius:10px; background:var(--soft); }
+.agent-input-mode-btn { height:26px; padding:0 7px; display:inline-flex; align-items:center; justify-content:center; gap:4px; border:0; border-radius:7px; background:transparent; color:var(--muted); font-size:11px; font-weight:700; cursor:pointer; }
+.agent-input-mode-btn i,.agent-input-mode-btn svg { width:12px; height:12px; }
+.agent-input-mode-btn.active { background:var(--card); color:var(--text); box-shadow:0 1px 4px rgba(15,23,42,.10); }
+.agent-panel.is-image-mode .agent-skill-chip,
+.agent-panel.is-image-mode .agent-runmode-chip { display:none; }
+.agent-panel.is-image-mode .agent-onebox { border-color:rgba(124,58,237,.38); }
+.agent-panel.is-image-mode .agent-input-mode-btn[data-agent-input-mode="image"].active { color:#6d28d9; }
+.agent-toolbar-icon { width:28px; height:28px; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; border:none; background:none; color:var(--muted); cursor:pointer; transition:color .14s ease, background .14s ease; }
+.agent-toolbar-icon:hover { color:var(--text); background:var(--soft); }
+.agent-toolbar-icon i,.agent-toolbar-icon svg { width:14px; height:14px; }
+.agent-toolbar-dropdown-wrap { position:relative; }
+.agent-toolbar-btn { display:inline-flex; align-items:center; gap:2px; height:28px; padding:0 5px; border-radius:8px; border:none; background:none; color:var(--muted); font-size:10px; font-weight:650; cursor:pointer; transition:color .14s ease, background .14s ease; white-space:nowrap; }
+.agent-toolbar-btn:hover { color:var(--text); background:var(--soft); }
+.agent-toolbar-btn i,.agent-toolbar-btn svg { width:11px; height:11px; }
+.agent-toolbar-chip {
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+    max-width:210px;
+    height:30px;
+    padding:0 10px 0 9px;
+    border-radius:999px;
+    border:1px solid rgba(15,23,42,.08);
+    background:#f3f4f6;
+    color:#111827;
+    font-size:12px;
+    font-weight:600;
+    cursor:pointer;
+    transition:color .14s ease, background .14s ease, border-color .14s ease, box-shadow .14s ease;
+    white-space:nowrap;
+    box-shadow:0 1px 0 rgba(15,23,42,.02);
+}
+.agent-toolbar-chip:hover { background:#eef2f7; border-color:rgba(15,23,42,.14); color:#0f172a; }
+.agent-toolbar-chip:active { transform:translateY(0.5px); }
+.agent-toolbar-chip .agent-chip-icon,
+.agent-toolbar-chip i,
+.agent-toolbar-chip svg { width:14px; height:14px; flex:0 0 auto; color:#6b7280; }
+.agent-toolbar-chip > i:last-child,
+.agent-toolbar-chip > svg:last-child { width:12px; height:12px; color:#9ca3af; }
+.agent-toolbar-chip span { max-width:148px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#agentModelBtn { background:#f3f4f6; }
+#agentModelBtn:hover { background:#ebedf1; }
+.agent-skill-chip { color:#5b21b6; background:#f5f3ff; border-color:#ddd6fe; }
+.agent-skill-chip:hover { background:#ede9fe; border-color:#c4b5fd; color:#4c1d95; }
+.agent-skill-chip .agent-chip-icon,
+.agent-skill-chip i,
+.agent-skill-chip svg { color:#7c3aed; }
+.agent-skill-chip > i:last-child,
+.agent-skill-chip > svg:last-child { color:#a78bfa; }
+.agent-toolbar-spacer { display:none; }
+.agent-model-panel { min-width:268px; padding:10px; gap:8px; border-radius:14px; }
+.agent-dropdown-panel { position:fixed; min-width:200px; max-width:calc(100vw - 60px); border-radius:13px; border:1px solid var(--line); background:var(--card); box-shadow:0 -4px 24px rgba(15,23,42,.12); z-index:9999; padding:8px; display:flex; flex-direction:column; gap:6px; }
+.agent-dropdown-panel[hidden] { display:none; }
+.agent-dropdown-row { display:flex; align-items:center; gap:6px; }
+.agent-dropdown-row label { flex:0 0 36px; font-size:10px; font-weight:750; color:var(--muted); }
+.agent-dropdown-selects { flex:1; display:flex; gap:4px; }
+.agent-dropdown-selects select { flex:1; min-width:0; height:26px; border-radius:8px; border:1px solid var(--line); background:var(--soft); color:var(--text); font-size:10px; font-weight:650; padding:0 6px; outline:none; }
+.agent-dropdown-selects select:focus { border-color:var(--strong); }
+
+/* 比例图标 */
+.agent-ratio-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:5px; }
+.agent-ratio-btn { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; height:52px; border-radius:9px; border:1px solid var(--line); background:var(--card); color:var(--muted); font-size:9.5px; font-weight:700; cursor:pointer; transition:border-color .14s ease, color .14s ease, background .14s ease; padding:6px 4px; }
+.agent-ratio-btn:hover { border-color:var(--strong); color:var(--text); }
+.agent-ratio-btn.active { border-color:var(--strong); background:var(--soft); color:var(--text); }
+.agent-ratio-icon { display:block; width:20px; max-height:24px; border:1.5px solid currentColor; border-radius:3px; }
+.agent-res-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:5px; }
+.agent-res-btn { height:30px; border-radius:9px; border:1px solid var(--line); background:var(--card); color:var(--muted); font-size:9.5px; font-weight:700; cursor:pointer; transition:border-color .14s ease, color .14s ease, background .14s ease; }
+.agent-res-btn:hover { border-color:var(--strong); color:var(--text); }
+.agent-res-btn.active { border-color:var(--strong); background:var(--soft); color:var(--text); }
+
+/* 折叠菜单 */
+.agent-more-wrap { position:relative; }
+.agent-more-panel { position:absolute; top:100%; right:0; margin-top:4px; min-width:140px; border-radius:10px; border:1px solid var(--line); background:var(--card); box-shadow:0 8px 32px rgba(15,23,42,.14); z-index:80; padding:4px; display:flex; flex-direction:column; gap:2px; }
+.agent-more-panel[hidden] { display:none; }
+.agent-more-item { display:flex; align-items:center; gap:6px; width:100%; padding:7px 10px; border-radius:7px; border:none; background:none; color:var(--text); font-size:10.5px; font-weight:650; cursor:pointer; text-align:left; transition:background .14s ease; }
+.agent-more-item:hover { background:var(--soft); }
+.agent-more-item i,.agent-more-item svg { width:13px; height:13px; color:var(--faint); }
+
+/* 参数面板（OneBox 风格） */
+.agent-params-panel { min-width:280px; padding:12px; gap:14px; }
+.agent-params-section { display:flex; flex-direction:column; gap:6px; }
+.agent-params-title { font-size:10px; font-weight:750; color:var(--muted); }
+.agent-quality-seg { display:flex; border-radius:10px; background:var(--soft); border:1px solid var(--line); overflow:hidden; }
+.agent-quality-btn { flex:1; height:30px; border:none; background:none; color:var(--muted); font-size:10.5px; font-weight:700; cursor:pointer; transition:background .14s ease, color .14s ease; }
+.agent-quality-btn.active { background:var(--card); color:var(--text); box-shadow:0 1px 4px rgba(15,23,42,.1); border-radius:9px; margin:1px; }
+.agent-quality-btn:not(.active):hover { color:var(--text); }
+.agent-size-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:5px; }
+.agent-size-btn { height:34px; border-radius:9px; border:1px solid var(--line); background:var(--card); color:var(--muted); font-size:9.5px; font-weight:700; cursor:pointer; transition:border-color .14s ease, color .14s ease, background .14s ease; display:flex; align-items:center; justify-content:center; }
+.agent-size-btn:hover { border-color:var(--strong); color:var(--text); }
+.agent-size-btn.active { border-color:var(--strong); background:var(--soft); color:var(--text); }
+.agent-count-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:5px; }
+.agent-count-btn { height:30px; border-radius:9px; border:1px solid var(--line); background:var(--card); color:var(--muted); font-size:9.5px; font-weight:700; cursor:pointer; transition:border-color .14s ease, color .14s ease, background .14s ease; }
+.agent-count-btn:hover { border-color:var(--strong); color:var(--text); }
+.agent-count-btn.active { border-color:var(--strong); background:var(--soft); color:var(--text); }
+.agent-send-btn { flex:0 0 auto; width:28px; height:28px; border-radius:9px; background:var(--strong); color:var(--strong-text); display:inline-flex; align-items:center; justify-content:center; border:none; cursor:pointer; }
+.agent-send-btn:disabled { opacity:.45; cursor:not-allowed; }
+.agent-send-btn i,.agent-send-btn svg { width:13px; height:13px; }
+.agent-panel.drag-over-input .agent-onebox { border-color:var(--strong); }
+
+/* 图片附件引用（OneBox 风格：缩略图+名称+点击跳转） */
+.agent-attach-ref { position:relative; display:flex; align-items:center; gap:6px; height:32px; padding:0 24px 0 4px; border-radius:8px; border:1px solid var(--line); background:var(--card); max-width:160px; cursor:pointer; transition:border-color .14s ease, background .14s ease; }
+.agent-attach-ref:hover { border-color:var(--strong); background:var(--soft); }
+.agent-attach-ref img { width:24px; height:24px; border-radius:6px; object-fit:cover; flex:0 0 auto; }
+.agent-attach-ref-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10px; font-weight:650; color:var(--text); }
+.agent-attach-ref button { position:absolute; top:2px; right:2px; width:14px; height:14px; border-radius:50%; background:rgba(15,23,42,.78); color:#fff; display:flex; align-items:center; justify-content:center; border:none; cursor:pointer; padding:0; }
+.agent-attach-ref button i,.agent-attach-ref button svg { width:8px; height:8px; }
+
+/* Skill 附件卡片（在附件行中） */
+.agent-attach-skill { position:relative; display:flex; align-items:center; gap:6px; height:44px; padding:0 28px 0 8px; border-radius:10px; border:1px solid var(--line); background:var(--card); max-width:180px; }
+.agent-attach-skill:has([data-agent-skill-save-preset]) { padding-right:36px; }
+.agent-attach-skill > i,.agent-attach-skill > svg { width:14px; height:14px; color:var(--strong); flex:0 0 auto; }
+.agent-attach-skill-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10px; font-weight:700; color:var(--text); }
+.agent-attach-skill button { position:absolute; top:2px; right:2px; width:15px; height:15px; border-radius:50%; background:rgba(15,23,42,.78); color:#fff; display:flex; align-items:center; justify-content:center; border:none; cursor:pointer; padding:0; }
+.agent-attach-skill button[data-agent-skill-save-preset] { right:18px; background:rgba(109,40,217,.88); }
+.agent-attach-skill button i,.agent-attach-skill button svg { width:9px; height:9px; }
+
+/* @ 引用面板 */
+.agent-mention-panel { position:absolute; bottom:100%; left:0; right:0; max-height:240px; overflow-y:auto; border-radius:13px; border:1px solid var(--line); background:var(--card); box-shadow:0 -4px 24px rgba(15,23,42,.12); z-index:50; margin-bottom:4px; }
+.agent-mention-panel[hidden] { display:none; }
+.agent-mention-panel:empty { display:none; }
+.agent-mention-item { display:flex; align-items:center; gap:8px; padding:7px 10px; cursor:pointer; border:none; background:none; width:100%; text-align:left; }
+.agent-mention-item:hover,.agent-mention-item.active { background:var(--soft); }
+.agent-mention-item img { width:32px; height:32px; border-radius:7px; object-fit:cover; flex:0 0 auto; border:1px solid var(--line); }
+.agent-mention-item-info { flex:1; min-width:0; }
+.agent-mention-item-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10.5px; font-weight:700; color:var(--text); }
+.agent-mention-item-time { font-size:9px; font-weight:600; color:var(--faint); }
+.agent-mention-empty { padding:12px; text-align:center; font-size:10.5px; color:var(--faint); }
+
+/* 输入框拖拽手柄 */
+.agent-input-resize { height:6px; cursor:ns-resize; display:flex; align-items:center; justify-content:center; border-radius:0 0 13px 13px; transition:background .14s ease; }
+.agent-input-resize:hover,.agent-input-resize.dragging { background:var(--soft); }
+.agent-input-resize::after { content:''; width:32px; height:3px; border-radius:999px; background:var(--line); transition:background .14s ease; }
+.agent-input-resize:hover::after,.agent-input-resize.dragging::after { background:var(--strong); }
+.agent-input-area { position:relative; }
+.agent-send-btn.is-stop { background:#ef4444; color:#fff; }
+.agent-send-btn.is-steer { background:#2563eb; color:#fff; }
+.agent-steer-status { display:block; margin-top:5px; font-size:11px; opacity:.72; text-align:right; }
+
+.agent-gen-status.stopped { color:#b45309; }
+.agent-gen-retry-row { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:6px; margin-top:8px; max-width:100%; min-width:0; }
+
+/* 普通画布：按钮属于已有快捷工具栏，不使用智能画布的绝对定位。 */
+.agent-toggle.canvas-agent-classic-toggle { position:static; right:auto; top:auto; z-index:auto; width:auto; min-width:38px; height:38px; padding:0 12px; box-shadow:none; backdrop-filter:none; }
+
+/* 普通画布的核心样式在插件样式之后加载，会把 asset-head 改回块布局。
+   使用面板 ID 固定同智能画布一致的标题栏布局。 */
+#agentPanel > .asset-head { display:flex !important; align-items:center !important; justify-content:flex-start !important; gap:4px !important; width:100% !important; height:26px !important; min-height:26px !important; padding:0 !important; margin:0 !important; }
+#agentPanel > .asset-head > .asset-title { display:flex !important; align-items:center !important; gap:7px !important; width:auto !important; height:26px !important; min-height:26px !important; margin:0 auto 0 0 !important; padding:0 !important; }
+#agentPanel > .asset-head > .asset-title > span { display:inline !important; margin:0 !important; }
+#agentPanel > .asset-head > .asset-title > .agent-brand-subtitle { display:inline !important; margin:3px 0 0 2px !important; color:var(--faint) !important; font-size:10px !important; font-weight:500 !important; white-space:nowrap !important; }
+#agentPanel > .asset-head > .asset-mini-btn,
+#agentPanel > .asset-head > .agent-more-wrap > .asset-mini-btn { display:flex !important; align-items:center !important; justify-content:center !important; flex:0 0 26px !important; width:26px !important; height:26px !important; min-width:26px !important; padding:1px 6px !important; margin:0 !important; }
+#agentPanel > .asset-head > .agent-more-wrap { display:flex !important; align-items:center !important; flex:0 0 26px !important; width:26px !important; height:26px !important; margin:0 !important; }
+.agent-toggle.canvas-agent-classic-toggle:hover { transform:none; }
+
+@media (max-width:900px){
+    :root { --canvas-agent-dock-width: 320px; }
+    /* 小屏图标模式：原按钮 right 14/62/110/158，再为 Agent 腾出最右一格 */
+    body:not(.canvas-agent-dock-open) #assetToggle { right: 62px !important; width:40px !important; padding:0 !important; }
+    body:not(.canvas-agent-dock-open) #smartLogToggle { right: 110px !important; width:40px !important; padding:0 !important; }
+    body:not(.canvas-agent-dock-open) #smartShortcutToggle { right: 158px !important; width:40px !important; padding:0 !important; }
+    body:not(.canvas-agent-dock-open) #smartWorkflowToggle { right: 206px !important; width:40px !important; padding:0 !important; }
+    .agent-toggle:not(.canvas-agent-classic-toggle) { right:14px !important; width:40px; padding:0; }
+    .agent-toggle:not(.canvas-agent-classic-toggle) span,
+    body:not(.canvas-agent-dock-open) #assetToggle span,
+    body:not(.canvas-agent-dock-open) #smartLogToggle span,
+    body:not(.canvas-agent-dock-open) #smartShortcutToggle span,
+    body:not(.canvas-agent-dock-open) #smartWorkflowToggle span { display:none; }
+}
+@media (max-width:760px){
+    :root { --canvas-agent-dock-width: min(320px, 86vw); }
+    .agent-panel { width:var(--canvas-agent-dock-width) !important; max-width:86vw !important; }
+    .agent-toggle.canvas-agent-classic-toggle { width:34px; min-width:34px; height:34px; padding:0; border-radius:12px; }
+    .agent-toggle.canvas-agent-classic-toggle span { display:none; }
+}
+
+
+/* Saved Skill presets and slash command menu */
+.agent-skill-manager { position:absolute; inset:50px 10px 92px; z-index:75; display:flex; flex-direction:column; gap:10px; padding:12px; border:1px solid var(--line); border-radius:14px; background:var(--card); box-shadow:0 12px 36px rgba(15,23,42,.16); overflow:hidden; }
+.agent-skill-manager[hidden] { display:none; }
+.agent-skill-manager-head { display:flex; align-items:center; justify-content:space-between; font-size:13px; }
+.agent-skill-manager-head button { width:26px; height:26px; display:flex; align-items:center; justify-content:center; border:0; border-radius:7px; background:transparent; color:var(--muted); cursor:pointer; }
+.agent-skill-manager-head button:hover { background:var(--soft); color:var(--text); }
+.agent-skill-editor { display:flex; flex-direction:column; gap:7px; padding:9px; border:1px solid var(--line); border-radius:11px; background:var(--soft); }
+.agent-skill-editor input,.agent-skill-editor textarea { width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--text); padding:7px 9px; font:11px/1.45 inherit; resize:vertical; }
+.agent-skill-editor input:focus,.agent-skill-editor textarea:focus { outline:2px solid rgba(37,99,235,.14); border-color:#2563eb; }
+.agent-skill-editor-actions { display:flex; justify-content:flex-end; gap:7px; }
+.agent-skill-editor-actions button { border:1px solid var(--line); border-radius:8px; padding:6px 10px; background:var(--card); color:var(--text); font-size:10px; cursor:pointer; }
+.agent-skill-editor-actions button.primary { border-color:#111827; background:#111827; color:#fff; }
+.agent-skill-list-title { display:flex; align-items:center; justify-content:space-between; font-size:11px; font-weight:700; }
+.agent-skill-list-title small { color:var(--faint); font-size:9px; font-weight:500; }
+.agent-skill-preset-list { flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:6px; }
+.agent-skill-preset-empty { padding:24px 10px; text-align:center; color:var(--faint); font-size:10px; }
+.agent-skill-preset-item { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center; padding:9px; border:1px solid var(--line); border-radius:10px; background:var(--card); }
+.agent-skill-preset-main { min-width:0; cursor:pointer; }
+.agent-skill-preset-name { font-size:11px; font-weight:750; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.agent-skill-preset-desc { margin-top:2px; color:var(--muted); font-size:9px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.agent-skill-preset-actions { display:flex; gap:3px; }
+.agent-skill-preset-actions button { width:24px; height:24px; display:flex; align-items:center; justify-content:center; border:0; border-radius:7px; background:transparent; color:var(--muted); cursor:pointer; }
+.agent-skill-preset-actions button:hover { background:var(--soft); color:var(--text); }
+.agent-skill-slash-panel .agent-mention-item { min-height:42px; }
+.agent-skill-slash-icon { width:30px; height:30px; flex:0 0 30px; display:flex; align-items:center; justify-content:center; border-radius:8px; background:#ede9fe; color:#6d28d9; font-size:14px; font-weight:800; }
+.agent-skill-slash-meta { color:var(--faint); font-size:9px; margin-top:2px; }
+.agent-attach-skill.is-preset { border-color:#c4b5fd; background:#f5f3ff; }
+
+/* Workflow execution logs (collapsed by default) */
+.agent-workflow-log { margin-top:8px; border:1px solid var(--line); border-radius:10px; background:var(--soft); overflow:hidden; }
+.agent-workflow-log-head { width:100%; display:flex; align-items:center; gap:8px; padding:8px 10px; border:0; background:transparent; cursor:pointer; text-align:left; color:inherit; font:inherit; }
+.agent-workflow-log-head:hover { background:rgba(0,0,0,.03); }
+.agent-workflow-log-title { font-size:10px; font-weight:800; color:var(--muted); flex:0 0 auto; }
+.agent-workflow-log-summary { flex:1 1 auto; min-width:0; font-size:10px; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.agent-workflow-log-chevron { flex:0 0 auto; color:var(--muted); font-size:11px; transition:transform .15s ease; }
+.agent-workflow-log.is-expanded .agent-workflow-log-chevron { transform:rotate(180deg); }
+.agent-workflow-log-body { display:none; padding:0 10px 8px; max-height:220px; overflow:auto; border-top:1px solid var(--line); }
+.agent-workflow-log.is-expanded .agent-workflow-log-body { display:block; }
+.agent-workflow-log.is-collapsed .agent-workflow-log-body { display:none; }
+.agent-workflow-log-item { display:flex; gap:8px; align-items:flex-start; font-size:10px; line-height:1.45; padding:2px 0; }
+.agent-workflow-log-time { flex:0 0 auto; color:var(--faint); font-variant-numeric:tabular-nums; }
+.agent-workflow-log-msg { color:var(--text); word-break:break-word; }
+.agent-workflow-log-item.level-ok .agent-workflow-log-msg { color:#059669; }
+.agent-workflow-log-item.level-warn .agent-workflow-log-msg { color:#b45309; }
+.agent-workflow-log-item.level-error .agent-workflow-log-msg { color:#e11d48; }
+.agent-gen-status.waiting { color:#2563eb; }
+
+.agent-msg.user .agent-msg-bubble-rich{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;white-space:normal;}
+.agent-msg.user .agent-msg-rich-text{min-width:0;white-space:normal;word-break:break-word;}
+.agent-msg.user .agent-inline-chip.is-readonly{pointer-events:auto;cursor:pointer;margin:0;}
+.agent-msg.user .agent-inline-chip.is-readonly .agent-inline-x{display:none;}
+.agent-msg-inline-refs{display:flex;flex-wrap:wrap;gap:6px;max-width:100%;justify-content:flex-end;}
+
+/* Agent 可读性：侧栏内正文与交互文字统一放大一级 */
+#agentPanel > .asset-head > .asset-title { font-size:14px !important; }
+#agentPanel .agent-msg-bubble,
+#agentPanel .agent-stream-body { font-size:14px; line-height:1.65; }
+#agentPanel .agent-gen-status,
+#agentPanel .agent-gen-error,
+#agentPanel .agent-workflow-log-title,
+#agentPanel .agent-workflow-log-summary,
+#agentPanel .agent-workflow-log-item { font-size:12px; }
+#agentPanel .agent-msg-option-btn,
+#agentPanel .agent-quick-btn,
+#agentPanel .agent-toolbar-btn,
+#agentPanel .agent-more-item { font-size:12px; }
+#agentPanel .agent-skill-preset-name,
+#agentPanel .agent-skill-list-title,
+#agentPanel .agent-mention-item-name { font-size:13px; }
+#agentPanel .agent-skill-preset-desc,
+#agentPanel .agent-skill-slash-meta,
+#agentPanel .agent-mention-item-time { font-size:11px; }
+#agentPanel .agent-skill-editor input,
+#agentPanel .agent-skill-editor textarea,
+#agentPanel .agent-skill-editor-actions button { font-size:13px; }
+#agentPanel .agent-prompt-card-body,
+#agentPanel .agent-prompt-edit-area,
+#agentPanel .agent-analysis-body,
+#agentPanel .agent-prompt-suggest-body { font-size:13px; }
+#agentPanel .agent-onebox .agent-input-editor { font-size:14px; }
+
+/* Lovart-like composer growth and toolbar polish */
+.agent-onebox { display:flex; flex-direction:column; }
+.agent-onebox.is-expanded .agent-input-editor { min-height:56px; }
+.agent-toolbar { padding:2px 8px 8px; }
+.agent-toolbar-left { gap:8px; row-gap:6px; flex-wrap:wrap; overflow:visible; align-content:center; }
+.agent-toolbar { align-items:flex-end; }
+.agent-toolbar-right { align-self:flex-end; }
+.agent-toolbar-chip {
+    height:32px;
+    padding:0 12px 0 10px;
+    border-radius:999px;
+    background:#f3f4f6;
+    border:1px solid rgba(15,23,42,.08);
+    box-shadow:none;
+}
+.agent-toolbar-chip span { max-width:150px; }
+#agentModelBtn { background:#f3f4f6; color:#111827; }
+.agent-skill-chip { background:#f5f3ff; border-color:#ddd6fe; color:#5b21b6; }
+.agent-send-btn {
+    width:34px; height:34px; border-radius:999px;
+    display:inline-flex; align-items:center; justify-content:center;
+    border:none; background:#111827; color:#fff; cursor:pointer;
+}
+.agent-send-btn:hover { opacity:.9; }
+.agent-send-btn i,.agent-send-btn svg { width:15px; height:15px; }
+.agent-onebox .agent-input-editor {
+    min-height:64px;
+    max-height:min(34vh, 280px);
+}
+.agent-inline-chip {
+    max-width:148px;
+    height:26px;
+    border-radius:8px;
+    padding:0 8px 0 3px;
+}
+.agent-inline-chip img { border-radius:6px; width:20px; height:20px; }
+.agent-inline-chip.is-ghost { opacity:.42; }
+
+/* Icon-only model button: no text, no chevron, no wide chip */
+.agent-model-icon-btn {
+    width: 28px;
+    height: 28px;
+    min-width: 28px;
+    padding: 0 !important;
+    border-radius: 8px !important;
+    border: none !important;
+    background: none !important;
+    box-shadow: none !important;
+    color: var(--muted);
+}
+.agent-model-icon-btn:hover {
+    color: var(--text);
+    background: var(--soft) !important;
+}
+.agent-model-icon-btn .agent-chip-icon,
+.agent-model-icon-btn i,
+.agent-model-icon-btn svg {
+    width: 14px !important;
+    height: 14px !important;
+    color: inherit !important;
+}
+.agent-model-icon-btn .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+#agentModelBtn.agent-model-icon-btn {
+    background: none !important;
+    color: var(--muted);
+}
+#agentModelBtn.agent-model-icon-btn:hover {
+    background: var(--soft) !important;
+    color: var(--text);
+}
+
+/* Skills 按钮展开态 */
+.agent-skill-chip.is-open {
+    background: #ede9fe !important;
+    border-color: #c4b5fd !important;
+    color: #4c1d95 !important;
+    box-shadow: inset 0 0 0 1px rgba(124, 58, 237, 0.12);
+}
+.agent-skill-chip.is-open .agent-chip-icon,
+.agent-skill-chip.is-open i,
+.agent-skill-chip.is-open svg {
+    color: #6d28d9 !important;
+}
+/* 发送按钮仅发送/停止两种形态 */
+.agent-send-btn.is-steer {
+    background: var(--strong);
+    color: var(--strong-text);
+}
+
+
+/* 发出消息上的 Skill 提示 */
+.agent-msg-skills {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin: 0 0 6px;
+}
+.agent-msg-skills-label {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--muted, #94a3b8);
+    letter-spacing: 0.02em;
+}
+.agent-msg-skill-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    max-width: 220px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, #7c3aed 35%, var(--line, #e2e8f0));
+    background: color-mix(in srgb, #7c3aed 12%, var(--card, #fff));
+    color: #6d28d9;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1.2;
+}
+.agent-msg-skill-tag i,
+.agent-msg-skill-tag svg {
+    width: 12px;
+    height: 12px;
+    flex: 0 0 auto;
+}
+.agent-msg-skill-tag span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.agent-msg.user .agent-msg-skill-tag {
+    color: #5b21b6;
+}
+
+
+/* 阶段1 LLM 理解内容（折叠） */
+.agent-understanding{margin:0 0 8px;max-width:100%;border:1px solid var(--line);border-radius:10px;background:var(--soft);overflow:hidden;box-sizing:border-box;}
+.agent-understanding-summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:6px;padding:7px 10px;font-size:10px;font-weight:800;color:var(--muted);min-width:0;}
+.agent-understanding-summary::-webkit-details-marker{display:none;}
+.agent-understanding-summary::before{content:'▸';color:var(--muted);font-size:11px;flex:0 0 auto;}
+.agent-understanding[open] .agent-understanding-summary::before{content:'▾';}
+.agent-understanding-preview{flex:1 1 auto;min-width:0;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.agent-understanding-body{padding:0 10px 8px;border-top:1px solid var(--line);font-size:11px;line-height:1.55;color:var(--text);white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto;}
+.agent-plan-lightbox-open{flex:0 0 auto;margin-left:4px;border:1px solid var(--line);background:var(--card);color:var(--muted);border-radius:999px;padding:2px 8px;font-size:10px;font-weight:700;cursor:pointer;}
+.agent-plan-lightbox-open:hover{color:var(--text);border-color:rgba(99,102,241,.35);}
+.agent-plan-lightbox{position:fixed;inset:0;z-index:10050;display:none;align-items:center;justify-content:center;padding:24px;background:rgba(15,23,42,.52);backdrop-filter:blur(4px);}
+.agent-plan-lightbox.is-open{display:flex;}
+.agent-plan-lightbox-panel{width:min(760px, calc(100vw - 48px));max-height:min(78vh, 820px);display:flex;flex-direction:column;border-radius:16px;border:1px solid var(--line);background:var(--card);box-shadow:0 24px 64px rgba(15,23,42,.28);overflow:hidden;}
+.agent-plan-lightbox-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border-bottom:1px solid var(--line);background:var(--soft);}
+.agent-plan-lightbox-title{font-size:13px;font-weight:800;color:var(--text);}
+.agent-plan-lightbox-close{border:1px solid var(--line);background:var(--card);color:var(--muted);border-radius:999px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;}
+.agent-plan-lightbox-body{padding:14px 16px;overflow:auto;font-size:12.5px;line-height:1.7;color:var(--text);white-space:pre-wrap;word-break:break-word;}
+.agent-plan-lightbox-editor{display:block;min-height:260px;resize:vertical;margin:14px 16px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text);font:inherit;line-height:1.7;white-space:pre-wrap;}
+.agent-plan-lightbox-actions{display:flex;justify-content:flex-end;gap:8px;padding:10px 14px;border-top:1px solid var(--line);background:var(--soft);}
+.agent-plan-lightbox-actions button{border:1px solid var(--line);border-radius:999px;padding:5px 12px;background:var(--card);color:var(--muted);font-size:11px;font-weight:700;cursor:pointer;}
+.agent-plan-lightbox-actions button.primary{background:var(--strong);border-color:var(--strong);color:var(--strong-text);}
+.agent-plan-lightbox-editor[hidden],.agent-plan-lightbox-actions[hidden],.agent-plan-lightbox-body[hidden]{display:none;}
+
+
+/* 全自动 / 半自动 切换 */
+.agent-runmode-chip { color:#0f766e; background:#f0fdfa; border-color:#99f6e4; }
+.agent-runmode-chip:hover { background:#ccfbf1; border-color:#5eead4; color:#115e59; }
+.agent-runmode-chip .agent-chip-icon,
+.agent-runmode-chip i,
+.agent-runmode-chip svg { color:#0d9488; }
+.agent-runmode-chip.is-semi { color:#9a3412; background:#fff7ed; border-color:#fed7aa; }
+.agent-runmode-chip.is-semi:hover { background:#ffedd5; border-color:#fdba74; color:#7c2d12; }
+.agent-runmode-chip.is-semi .agent-chip-icon,
+.agent-runmode-chip.is-semi i,
+.agent-runmode-chip.is-semi svg { color:#ea580c; }
+
+/* 策划折叠卡片防溢出 + 灯箱入口 */
+.agent-understanding{margin:0 0 8px;max-width:100%;border:1px solid var(--line);border-radius:10px;background:var(--soft);overflow:hidden;box-sizing:border-box;}
+.agent-understanding-summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:6px;padding:7px 10px;font-size:10px;font-weight:800;color:var(--muted);min-width:0;max-width:100%;}
+.agent-understanding-summary::-webkit-details-marker{display:none;}
+.agent-understanding-kicker{flex:0 0 auto;color:#4f46e5;background:rgba(79,70,229,.10);border:1px solid rgba(79,70,229,.18);border-radius:999px;padding:1px 8px;line-height:16px;}
+.agent-understanding-preview{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;color:var(--text);opacity:.88;}
+.agent-understanding-body{padding:8px 10px 10px;border-top:1px solid var(--line);font-size:12px;line-height:1.65;color:var(--text);white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto;}
+.agent-plan-lightbox-open{flex:0 0 auto;margin-left:4px;border:1px solid var(--line);background:var(--card);color:var(--muted);border-radius:999px;padding:2px 8px;font-size:10px;font-weight:700;cursor:pointer;}
+.agent-plan-lightbox-open:hover{color:var(--text);border-color:rgba(99,102,241,.35);}
+.agent-msg-options .agent-msg-option-btn[data-agent-option="AGENT_REVISE_PLANNING"]{border-style:dashed;}
+
+
+/* Chat scroll safety: messages must not flex-shrink into a fixed viewport */
+.agent-panel{
+    overflow:hidden;
+}
+.agent-messages{
+    flex:1 1 0 !important;
+    min-height:0 !important;
+    overflow-y:auto !important;
+    overflow-x:hidden;
+    overscroll-behavior:contain;
+}
+.agent-messages > *,
+.agent-msg,
+.agent-empty{
+    flex:0 0 auto !important;
+    flex-shrink:0 !important;
+}
+.agent-input-area{
+    flex:0 0 auto !important;
+}
+
+.agent-model-default-row { display:flex; align-items:center; gap:8px; padding:6px 2px 2px; margin-top:2px; border-top:1px solid var(--line); }
+.agent-model-default-row .agent-quick-btn { flex:0 0 auto; height:22px; padding:0 8px; font-size:10px; }
+.agent-model-default-hint { flex:1 1 auto; min-width:0; font-size:10px; line-height:1.35; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+
+/* ===== Plugin dock safety (no host source edits) ===== */
+html.canvas-agent-dock-open,
+body.canvas-agent-dock-open { --canvas-agent-dock-pad: var(--canvas-agent-dock-width, 380px); }
+#shell.canvas-agent-dock-open {
+    box-sizing: border-box !important;
+}
+.agent-panel .asset-head { flex:0 0 auto; }
+.agent-panel .agent-messages { flex:1 1 auto; }
+.agent-panel .agent-input-area { flex:0 0 auto; }
+
+
+/* 左侧拖拽调宽（不影响 fixed 定位） */
+.agent-dock-resizer {
+    position: absolute;
+    left: -3px;
+    top: 0;
+    bottom: 0;
+    width: 8px;
+    cursor: ew-resize;
+    z-index: 90;
+    touch-action: none;
+    background: transparent;
+}
+.agent-dock-resizer::after {
+    content: '';
+    position: absolute;
+    left: 3px;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    border-radius: 2px;
+    background: transparent;
+    transition: background .14s ease;
+}
+.agent-panel:hover .agent-dock-resizer::after,
+body.canvas-agent-dock-resizing .agent-dock-resizer::after {
+    background: color-mix(in srgb, var(--strong) 55%, transparent);
+}
+body.canvas-agent-dock-resizing {
+    cursor: ew-resize !important;
+    user-select: none !important;
+}
+body.canvas-agent-dock-resizing * {
+    cursor: ew-resize !important;
+    user-select: none !important;
+}
+#agentCloseBtn { margin-left: 2px; }
+
+/* 打开侧栏时：收缩 #shell 实际宽度，让 absolute 顶栏/画布右边缘左移，不被侧栏遮住 */
+html.canvas-agent-dock-open #shell,
+body.canvas-agent-dock-open #shell,
+#shell.canvas-agent-dock-open{
+    width: calc(100vw - var(--canvas-agent-dock-width, 380px)) !important;
+    max-width: calc(100vw - var(--canvas-agent-dock-width, 380px)) !important;
+    box-sizing: border-box !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+}
+html.canvas-agent-dock-open .agent-panel,
+body.canvas-agent-dock-open .agent-panel,
+.agent-panel.open{
+    position: fixed !important;
+    top: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    left: auto !important;
+}

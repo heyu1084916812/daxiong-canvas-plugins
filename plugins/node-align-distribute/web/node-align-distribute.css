@@ -1,0 +1,8 @@
+.nad-root{position:absolute;z-index:58;display:none;color:var(--text);font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.nad-root.visible{display:block}
+.nad-quickbar{width:238px;padding:7px 9px;border-radius:12px;background:var(--panel);color:var(--text);border:1px solid var(--line);box-shadow:0 14px 34px var(--shadow);backdrop-filter:blur(18px)}
+.nad-quick-actions{display:grid;grid-template-columns:repeat(6,1fr);align-items:center;gap:3px}
+.nad-icon-btn{width:100%;height:30px;padding:0;border:0;border-radius:7px;background:transparent;color:var(--muted);display:flex;align-items:center;justify-content:center;cursor:pointer}.nad-icon-btn:hover:not(:disabled){background:var(--soft);color:var(--text)}.nad-icon-btn:active:not(:disabled){background:var(--strong);color:var(--strong-text)}.nad-icon-btn:disabled{opacity:.3;cursor:not-allowed}.nad-icon-btn svg{width:20px;height:20px;fill:color-mix(in srgb,currentColor 12%,transparent);stroke:currentColor;stroke-width:1.5}
+.nad-key-object{outline:2px solid var(--strong)!important;outline-offset:4px!important}
+.nad-toast{position:absolute;top:78px;left:50%;z-index:90;max-width:360px;padding:9px 12px;border-radius:12px;transform:translate(-50%,-8px);background:var(--panel);border:1px solid var(--line);box-shadow:0 14px 34px var(--shadow);color:var(--text);font-size:11px;font-weight:800;opacity:0;pointer-events:none;transition:opacity .16s ease,transform .16s ease}.nad-toast.show{opacity:1;transform:translate(-50%,0)}
+body.canvas-node-drag .nad-root,body.canvas-node-resize .nad-root,body.canvas-selecting .nad-root,body.smart-node-drag .nad-root,body.smart-node-resize .nad-root{pointer-events:none;opacity:.36}
+@media(max-width:720px){.nad-quickbar{width:min(238px,calc(100vw - 32px))}}

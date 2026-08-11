@@ -1,0 +1,29 @@
+{
+  "schema_version": 2,
+  "id": "node-align-distribute",
+  "name": "节点对齐",
+  "description": "为普通和智能画布提供六种节点对齐方式与关键对象对齐",
+  "version": "1.2.1",
+  "author": "local",
+  "icon": "assets/icon.svg",
+  "min_core_version": "2026.08.04",
+  "max_core_version": null,
+  "requires_capabilities": ["canvas.classic.v1", "canvas.smart.v1"],
+  "frontend": {
+    "classic_canvas": {
+      "css": ["web/node-align-distribute.css"],
+      "js": ["web/node-align-distribute-core.js", "web/node-align-distribute-classic.js"]
+    },
+    "smart_canvas": {
+      "css": ["web/node-align-distribute.css"],
+      "js": ["web/node-align-distribute-core.js", "web/node-align-distribute-smart.js"]
+    }
+  },
+  "permissions": ["read_canvas_state", "write_canvas_state"],
+  "data_version": 1,
+  "data_migration": {
+    "strategy": "none",
+    "from_versions": [0, 1],
+    "preserves_canvas_data": true
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "schema_version": 2,
+  "id": "canvas-bug-fix",
+  "name": "画布 Bug 修复",
+  "description": "修复画布循环、整理选中、工作流资产库、普通画布 LLM 面板及多选 Alt 拖拽复制问题",
+  "version": "1.7.0",
+  "author": "local",
+  "min_core_version": "2026.08.04",
+  "max_core_version": null,
+  "requires_capabilities": [
+    "canvas.smart.v1"
+  ],
+  "frontend": {
+    "classic_canvas": {
+      "js": [
+        "web/arrange-selected-classic-fix.js",
+        "web/classic-loop-connected-only-fix.js",
+        "web/classic-llm-pane-resize-fix.js",
+        "web/alt-drag-duplicate-classic-fix.js"
+      ]
+    },
+    "smart_canvas": {
+      "js": [
+        "web/loop-reference-fix.js",
+        "web/arrange-selected-fix.js",
+        "web/smart-workflow-library-fix.js",
+        "web/alt-drag-duplicate-smart-fix.js"
+      ]
+    }
+  },
+  "permissions": [
+    "read_canvas_state",
+    "write_canvas_state"
+  ],
+  "data_version": 1,
+  "data_migration": {
+    "strategy": "none",
+    "from_versions": [0, 1],
+    "preserves_canvas_data": true
+  }
+}

@@ -1,0 +1,375 @@
+.node.local-patch-merge-node {
+    overflow: visible;
+    min-width: 230px;
+}
+
+.local-patch-image-toolbar {
+    position: absolute;
+    z-index: 30;
+    left: 50%;
+    top: -46px;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    padding: 4px 5px;
+    border: 1px solid rgba(148, 163, 184, .35);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, .96);
+    box-shadow: 0 10px 28px rgba(15, 23, 42, .16);
+    white-space: nowrap;
+}
+
+.local-patch-image-toolbar button {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 26px;
+    padding: 0 7px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: #334155;
+    font-size: 10px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.local-patch-image-toolbar button i,
+.local-patch-image-toolbar button svg {
+    width: 12px;
+    height: 12px;
+}
+
+.local-patch-image-toolbar button:hover {
+    color: #1d4ed8;
+    background: #eff6ff;
+}
+
+.local-patch-classic-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 14px 14px;
+    height: 100%;
+    box-sizing: border-box;
+}
+
+.local-patch-classic-input {
+    position: relative;
+    min-height: 48px;
+    padding: 8px 10px 8px 22px;
+    border: 1px solid #dbe3ef;
+    border-radius: 10px;
+    background: rgba(248, 250, 252, .9);
+}
+
+.local-patch-classic-input strong,
+.local-patch-classic-input span {
+    display: block;
+}
+
+.local-patch-classic-input strong {
+    color: #475569;
+    font-size: 11px;
+}
+
+.local-patch-classic-input span {
+    margin-top: 4px;
+    overflow: hidden;
+    color: #64748b;
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.local-patch-classic-input .port.in {
+    left: -7px;
+    top: 50%;
+    transform: translate(-50%, -50%);
+}
+
+.local-patch-classic-summary {
+    min-height: 34px;
+    color: #64748b;
+    font-size: 11px;
+    line-height: 1.45;
+}
+
+.local-patch-classic-error {
+    color: #dc2626;
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.local-patch-classic-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.local-patch-classic-actions label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    color: #64748b;
+    font-size: 11px;
+}
+
+.local-patch-classic-actions button {
+    margin-left: auto;
+    min-height: 34px;
+    padding: 0 16px;
+    border: 1px solid #2563eb;
+    border-radius: 9px;
+    background: #2563eb;
+    color: white;
+    font-size: 12px;
+    font-weight: 800;
+    cursor: pointer;
+}
+
+.local-patch-classic-actions button:disabled {
+    opacity: .55;
+    cursor: wait;
+}
+
+#imageEditModal [data-local-patch-extract-mode].active {
+    color: white;
+    background: #111827;
+}
+
+@media (max-width: 900px) {
+    .local-patch-image-toolbar button span { display:none; }
+    .local-patch-image-toolbar button { width:28px; padding:0; }
+}
+/* v2.2 merge card, picker, comparison */
+.node.local-patch-merge-node {
+    min-width: 230px;
+    min-height: 250px;
+    overflow: visible;
+    border-radius: 16px;
+}
+.node.local-patch-merge-node .node-body {
+    height: calc(100% - 42px);
+    min-height: 0;
+}
+.local-patch-merge-card {
+    position: relative;
+    height: 100%;
+    min-height: 0;
+    padding: 10px 12px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    box-sizing: border-box;
+}
+.local-patch-merge-preview {
+    flex: 1 1 auto;
+    min-height: 112px;
+    display: grid;
+    grid-template-columns: minmax(0,1fr) minmax(0,1fr);
+    gap: 2px;
+    overflow: hidden;
+    border: 1px solid #dbe3ef;
+    border-radius: 13px;
+    background: #e2e8f0;
+}
+.local-patch-preview-pane {
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+    overflow: visible;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #f8fafc;
+    color: #94a3b8;
+}
+.local-patch-preview-pane > img { width:100%; height:100%; display:block; object-fit:cover; }
+.local-patch-preview-pane > svg { width:25px; height:25px; }
+
+.local-patch-merge-node .local-patch-multi-preview {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  gap:6px;
+  align-items:stretch;
+}
+.local-patch-merge-node .local-patch-patch-list {
+  min-width:0;
+  min-height:0;
+  display:grid;
+  grid-auto-rows:minmax(72px,1fr);
+  gap:5px;
+  overflow:auto;
+  scrollbar-width:thin;
+}
+.local-patch-merge-node .local-patch-patch-list .local-patch-preview-pane { min-height:72px; }
+.local-patch-preview-label {
+    position: absolute;
+    left: 7px;
+    bottom: 7px;
+    z-index: 2;
+    padding: 3px 7px;
+    border-radius: 999px;
+    background: rgba(15,23,42,.72);
+    color: #fff;
+    font-size: 9px;
+    font-weight: 800;
+}
+.local-patch-choice {
+    position: absolute;
+    z-index: 3;
+    top: 6px;
+    left: 50%;
+    transform: translateX(-50%);
+    height: 23px;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 3px;
+    border-radius: 999px;
+    background: rgba(15,23,42,.78);
+    color: #fff;
+    font-size: 9px;
+    white-space: nowrap;
+}
+.local-patch-choice button {
+    width: 19px;
+    height: 19px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: #fff;
+    cursor: pointer;
+}
+.local-patch-choice button:hover { background:rgba(255,255,255,.2); }
+.local-patch-choice svg { width:11px; height:11px; }
+.local-patch-merge-chips { display:flex; justify-content:center; gap:6px; }
+.local-patch-merge-chip {
+    min-width: 0;
+    height: 22px;
+    padding: 0 8px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: #f1f5f9;
+    color: #94a3b8;
+    font-size: 9px;
+    font-weight: 750;
+    white-space: nowrap;
+}
+.local-patch-merge-chip.connected { color:#047857; background:#d1fae5; }
+.local-patch-merge-chip.conflict { color:#b91c1c; background:#fee2e2; }
+.local-patch-merge-chip svg { width:10px; height:10px; }
+.local-patch-error { max-height:44px; overflow:auto; color:#dc2626; font-size:10px; line-height:1.35; }
+.local-patch-merge-options { min-height:24px; display:flex; align-items:center; justify-content:space-between; gap:6px; color:#64748b; font-size:10px; }
+.local-patch-merge-options label { display:inline-flex; align-items:center; gap:4px; white-space:nowrap; }
+.local-patch-compare {
+    height: 25px;
+    padding: 0 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #fff;
+    color: #334155;
+    font-size: 10px;
+    cursor: pointer;
+}
+.local-patch-compare svg { width:11px; height:11px; }
+.local-patch-merge-run {
+    flex: 0 0 34px;
+    width: 100%;
+    height: 34px;
+    border: 0;
+    border-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    background: #111827;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 850;
+    cursor: pointer;
+}
+.local-patch-merge-run:disabled { opacity:.55; cursor:wait; }
+.local-patch-merge-run svg { width:13px; height:13px; }
+.node.local-patch-merge-node > .local-patch-merge-original-port {
+    left:-29px;
+    top:50%;
+    right:auto;
+    transform:translateY(-50%);
+}
+.node.local-patch-merge-node > .local-patch-merge-shared-port {
+    right:-15px;
+    top:50%;
+    left:auto;
+    transform:translateY(-50%);
+}
+
+.local-patch-compare-modal {
+    --local-patch-compare-pos: 50%;
+    position: fixed;
+    z-index: 100000;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 28px;
+    background: rgba(15,23,42,.72);
+    backdrop-filter: blur(7px);
+}
+.local-patch-compare-modal.open { display:flex; }
+.local-patch-compare-dialog {
+    width: min(1080px, 94vw);
+    max-height: 92vh;
+    padding: 12px;
+    border: 1px solid rgba(255,255,255,.28);
+    border-radius: 18px;
+    background: #0f172a;
+    box-shadow: 0 24px 80px rgba(0,0,0,.42);
+}
+.local-patch-compare-head { height:34px; display:flex; align-items:center; justify-content:space-between; color:#fff; }
+.local-patch-compare-head button { width:28px; height:28px; border:0; border-radius:8px; background:rgba(255,255,255,.1); color:#fff; font-size:20px; cursor:pointer; }
+.local-patch-compare-stage {
+    position: relative;
+    height: min(70vh, 720px);
+    overflow: hidden;
+    border-radius: 12px;
+    background: #020617;
+}
+.local-patch-compare-stage img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; }
+.local-patch-compare-original-wrap { position:absolute; inset:0; overflow:hidden; clip-path:inset(0 calc(100% - var(--local-patch-compare-pos)) 0 0); }
+.local-patch-compare-divider { position:absolute; top:0; bottom:0; left:var(--local-patch-compare-pos); width:2px; transform:translateX(-1px); background:#fff; box-shadow:0 0 0 1px rgba(0,0,0,.25); }
+.local-patch-compare-divider span { position:absolute; left:50%; top:50%; width:34px; height:34px; transform:translate(-50%,-50%); border:2px solid #fff; border-radius:50%; background:rgba(15,23,42,.65); }
+.local-patch-compare-tag { position:absolute; top:12px; padding:5px 9px; border-radius:999px; background:rgba(15,23,42,.68); color:#fff; font-size:11px; font-weight:800; }
+.local-patch-compare-tag.original { left:12px; }
+.local-patch-compare-tag.result { right:12px; }
+.local-patch-compare-range { width:100%; margin:11px 0 0; accent-color:#fff; }
+.local-patch-merge-node .local-patch-classic-body { padding:0; gap:0; overflow:visible; }
+.local-patch-merge-node > .resize-handle { z-index:12; }
+
+#outputPreview .local-patch-preview-compare {
+    position: absolute;
+    z-index: 14;
+    right: 18px;
+    bottom: 18px;
+    display: none;
+    height: 34px;
+    padding: 0 12px;
+    border-radius: 999px;
+    box-shadow: 0 10px 28px rgba(15,23,42,.18);
+}
+#outputPreview .local-patch-preview-compare.active {
+    background: #111827;
+    color: #fff;
+}
+#outputPreview .local-patch-preview-compare svg { width:14px; height:14px; }
