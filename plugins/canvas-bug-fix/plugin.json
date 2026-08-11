@@ -2,8 +2,8 @@
   "schema_version": 2,
   "id": "canvas-bug-fix",
   "name": "画布 Bug 修复",
-  "description": "修复画布循环、整理选中、工作流资产库、普通画布 LLM 面板及多选 Alt 拖拽复制问题",
-  "version": "1.7.0",
+  "description": "修复画布循环、整理选中、工作流资产库双向传输、普通画布 LLM 面板及多选 Alt 拖拽复制问题",
+  "version": "1.8.0",
   "author": "local",
   "min_core_version": "2026.08.04",
   "max_core_version": null,
@@ -24,6 +24,7 @@
         "web/loop-reference-fix.js",
         "web/arrange-selected-fix.js",
         "web/smart-workflow-library-fix.js",
+        "web/smart-workflow-asset-drop-fix.js",
         "web/alt-drag-duplicate-smart-fix.js"
       ]
     }
