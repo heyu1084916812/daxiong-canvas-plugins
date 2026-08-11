@@ -4,8 +4,11 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Net;
+using System.Net.Sockets;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -257,7 +260,7 @@ internal sealed class SlideToggle : Control
 
 internal sealed class PluginManagerForm : Form
 {
-    private const string ManagerVersion = "1.2.0";
+    private const string ManagerVersion = "1.3.0";
     private const string RepositoryUrl = "https://github.com/heyu1084916812/daxiong-canvas-plugins";
     private const string ReleasesApiUrl = "https://api.github.com/repos/heyu1084916812/daxiong-canvas-plugins/releases?per_page=30";
     private readonly string baseDir;
@@ -270,6 +273,7 @@ internal sealed class PluginManagerForm : Form
     private readonly Label coreVersionLabel;
     private readonly Label status;
     private readonly Button installButton;
+    private readonly Button integrateButton;
     private readonly Button themeButton;
     private readonly Button projectButton;
     private readonly System.Windows.Forms.Timer startupTimer;
@@ -279,6 +283,7 @@ internal sealed class PluginManagerForm : Form
     private readonly Dictionary<RoundedPanel, Color> lightBorderColors = new Dictionary<RoundedPanel, Color>();
     private Dictionary<string, object> currentSnapshot;
     private bool darkTheme;
+    private bool canvasConnected;
     private int startupAttempts;
 
     internal PluginManagerForm(string baseDir, int port)
@@ -315,12 +320,16 @@ internal sealed class PluginManagerForm : Form
         themeButton.Click += delegate { ToggleTheme(); };
         installButton = MakeButton("安装 ZIP", Color.FromArgb(17, 24, 39), Color.White);
         installButton.Click += delegate { InstallPlugin(); };
+        integrateButton = MakeButton("接入画布", Color.FromArgb(17, 24, 39), Color.White);
+        integrateButton.Click += delegate { IntegrateCanvas(); };
         FlowLayoutPanel headerActions = new FlowLayoutPanel
         {
-            Dock = DockStyle.Right, Width = 145, Padding = new Padding(8, 27, 8, 0),
+            Dock = DockStyle.Right, Width = 265, Padding = new Padding(8, 27, 8, 0),
             FlowDirection = FlowDirection.LeftToRight, WrapContents = false, BackColor = Color.Transparent
         };
+        integrateButton.Margin = new Padding(3, 0, 8, 0);
         installButton.Margin = new Padding(3, 0, 0, 0);
+        headerActions.Controls.Add(integrateButton);
         headerActions.Controls.Add(installButton);
 
         projectButton = new GitHubButton
@@ -355,7 +364,7 @@ internal sealed class PluginManagerForm : Form
 
         startupTimer = new System.Windows.Forms.Timer { Interval = 500 };
         startupTimer.Tick += CheckStartup;
-        Shown += delegate { ConnectOrStart(); BeginManagerUpdateCheck(); };
+        Shown += delegate { InitializeCanvasConnection(); BeginManagerUpdateCheck(); };
         ApplyThemeTree(this);
     }
 
@@ -363,6 +372,179 @@ internal sealed class PluginManagerForm : Form
     {
         try { Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true }); }
         catch { }
+    }
+
+    private void InitializeCanvasConnection()
+    {
+        if (EndpointReady()) { LoadPlugins(); return; }
+        if (!HasLocalPluginSystem())
+        {
+            ShowIntegrationRequired();
+            return;
+        }
+        ConnectOrStart();
+    }
+
+    private bool HasLocalPluginSystem()
+    {
+        return File.Exists(Path.Combine(baseDir, "plugin_host.py"))
+            && File.Exists(Path.Combine(baseDir, "plugin_system", "__init__.py"))
+            && File.Exists(Path.Combine(baseDir, "plugin_system", "host.py"))
+            && File.Exists(Path.Combine(baseDir, "plugin_system", "api.py"));
+    }
+
+    private void ShowIntegrationRequired()
+    {
+        canvasConnected = false;
+        cards.Controls.Clear();
+        cards.Controls.Add(new Label
+        {
+            Text = "当前画布还没有插件系统\n\n点击右上角“接入画布”，一次完成安装和连接。",
+            AutoSize = false,
+            Size = new Size(Math.Max(590, cards.ClientSize.Width - 38), 150),
+            TextAlign = ContentAlignment.MiddleCenter,
+            ForeColor = Color.FromArgb(100, 116, 139),
+            Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Regular),
+            BackColor = Color.Transparent
+        });
+        installedValue.Text = "0";
+        enabledValue.Text = "0";
+        issuesValue.Text = "0";
+        coreVersionLabel.Text = "插件系统\n尚未接入";
+        status.Text = "等待接入画布";
+        SetReady("等待接入画布");
+        ApplyThemeTree(cards);
+    }
+
+    private void IntegrateCanvas()
+    {
+        string mainPath = Path.Combine(baseDir, "main.py");
+        if (!File.Exists(mainPath))
+        {
+            MessageBox.Show(this, "当前目录没有找到 main.py。\n\n请先把插件管理器放进大雄无限画布主目录，再点击“接入画布”。", "无法接入画布", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+        bool repair = HasLocalPluginSystem();
+        string prompt = repair
+            ? "当前目录已经存在插件系统。是否重新接入并修复核心文件？\n\n原文件会先备份，插件和插件数据不会被覆盖。"
+            : "将把插件系统接入当前大雄无限画布。\n\n安装内容：插件后台、插件目录和 run.bat。\n不会修改 main.py，也不会删除画布数据。是否继续？";
+        if (MessageBox.Show(this, prompt, repair ? "修复画布接入" : "接入画布", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        try
+        {
+            SetBusy(repair ? "正在修复插件系统…" : "正在接入插件系统…");
+            string backup = InstallEmbeddedPluginSystem();
+            canvasConnected = false;
+            if (PortIsOccupied() && !EndpointReady())
+            {
+                SetReady("插件系统已接入 · 等待重启画布");
+                MessageBox.Show(this,
+                    "插件系统已经接入完成。\n\n检测到画布目前正在运行，请先完全退出旧画布，再重新打开插件管理器。\n备份位置：" + backup,
+                    "接入完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            MessageBox.Show(this, "插件系统已接入完成。现在将启动插件后台。\n\n备份位置：" + backup, "接入完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            ConnectOrStart();
+        }
+        catch (Exception ex)
+        {
+            canvasConnected = false;
+            SetReady("画布接入失败");
+            MessageBox.Show(this, "接入失败：" + ex.Message, "接入画布", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private string InstallEmbeddedPluginSystem()
+    {
+        Stream payload = Assembly.GetExecutingAssembly().GetManifestResourceStream("Daxiong.PluginSystemBootstrap.zip");
+        if (payload == null) throw new InvalidOperationException("当前 EXE 缺少内置插件系统接入包，请重新下载正式发行版。");
+        string dataDir = Path.Combine(baseDir, "data");
+        string timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+        string stage = Path.Combine(dataDir, "plugin-system-install-stage-" + Guid.NewGuid().ToString("N"));
+        string backup = Path.Combine(dataDir, "plugin-system-backups", timestamp);
+        string targetSystem = Path.Combine(baseDir, "plugin_system");
+        string targetHost = Path.Combine(baseDir, "plugin_host.py");
+        string targetRun = Path.Combine(baseDir, "run.bat");
+        bool hadSystem = Directory.Exists(targetSystem);
+        bool hadHost = File.Exists(targetHost);
+        bool hadRun = File.Exists(targetRun);
+        Directory.CreateDirectory(stage);
+        try
+        {
+            using (payload)
+            using (ZipArchive archive = new ZipArchive(payload, ZipArchiveMode.Read))
+            {
+                string stageRoot = Path.GetFullPath(stage).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                foreach (ZipArchiveEntry entry in archive.Entries)
+                {
+                    string relative = entry.FullName.Replace('/', Path.DirectorySeparatorChar);
+                    string destination = Path.GetFullPath(Path.Combine(stage, relative));
+                    if (!destination.StartsWith(stageRoot, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("接入包包含越界路径。");
+                    if (string.IsNullOrEmpty(entry.Name)) { Directory.CreateDirectory(destination); continue; }
+                    Directory.CreateDirectory(Path.GetDirectoryName(destination));
+                    using (Stream input = entry.Open())
+                    using (FileStream output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None)) input.CopyTo(output);
+                }
+            }
+            string stagedSystem = Path.Combine(stage, "plugin_system");
+            string stagedHost = Path.Combine(stage, "plugin_host.py");
+            string stagedRun = Path.Combine(stage, "run.bat");
+            if (!File.Exists(stagedHost) || !File.Exists(Path.Combine(stagedSystem, "host.py")) || !File.Exists(Path.Combine(stagedSystem, "api.py")) || !File.Exists(stagedRun))
+                throw new InvalidDataException("内置插件系统接入包不完整。");
+
+            if (hadSystem || hadHost || hadRun)
+            {
+                Directory.CreateDirectory(backup);
+                if (hadSystem) CopyDirectory(targetSystem, Path.Combine(backup, "plugin_system"));
+                if (hadHost) File.Copy(targetHost, Path.Combine(backup, "plugin_host.py"), true);
+                if (hadRun) File.Copy(targetRun, Path.Combine(backup, "run.bat"), true);
+            }
+            try
+            {
+                if (Directory.Exists(targetSystem)) Directory.Delete(targetSystem, true);
+                CopyDirectory(stagedSystem, targetSystem);
+                File.Copy(stagedHost, targetHost, true);
+                File.Copy(stagedRun, targetRun, true);
+                Directory.CreateDirectory(Path.Combine(baseDir, "plugins"));
+                Directory.CreateDirectory(Path.Combine(baseDir, "plugin-data"));
+                File.WriteAllText(Path.Combine(dataDir, "plugin-system-integrated.txt"), "version=1.3.0\r\ninstalled=" + DateTime.Now.ToString("s") + "\r\n", Encoding.UTF8);
+            }
+            catch
+            {
+                if (Directory.Exists(targetSystem)) Directory.Delete(targetSystem, true);
+                if (hadSystem && Directory.Exists(Path.Combine(backup, "plugin_system"))) CopyDirectory(Path.Combine(backup, "plugin_system"), targetSystem);
+                if (hadHost) File.Copy(Path.Combine(backup, "plugin_host.py"), targetHost, true); else if (File.Exists(targetHost)) File.Delete(targetHost);
+                if (hadRun) File.Copy(Path.Combine(backup, "run.bat"), targetRun, true); else if (File.Exists(targetRun)) File.Delete(targetRun);
+                throw;
+            }
+            return (hadSystem || hadHost || hadRun) ? backup : "首次接入，无旧文件";
+        }
+        finally
+        {
+            try { if (Directory.Exists(stage)) Directory.Delete(stage, true); }
+            catch { }
+        }
+    }
+
+    private static void CopyDirectory(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (string file in Directory.GetFiles(source)) File.Copy(file, Path.Combine(destination, Path.GetFileName(file)), true);
+        foreach (string directory in Directory.GetDirectories(source)) CopyDirectory(directory, Path.Combine(destination, Path.GetFileName(directory)));
+    }
+
+    private bool PortIsOccupied()
+    {
+        try
+        {
+            using (TcpClient client = new TcpClient())
+            {
+                IAsyncResult result = client.BeginConnect("127.0.0.1", port, null, null);
+                bool connected = result.AsyncWaitHandle.WaitOne(300);
+                if (connected) client.EndConnect(result);
+                return connected;
+            }
+        }
+        catch { return false; }
     }
 
     private void BeginManagerUpdateCheck()
@@ -609,7 +791,7 @@ internal sealed class PluginManagerForm : Form
         string detail;
         if (!TryStartBackend(out mode, out detail))
         {
-            ShowError("无法启动后台服务。\n" + detail + "\n\n可用方式：\n1) 大雄无限画布.exe\n2) python\\python.exe + plugin_host.py\n3) start.bat / run.bat");
+            ShowError("无法启动后台服务。\n" + detail + "\n\n可用方式：\n1) python\\python.exe + plugin_host.py\n2) 大雄无限画布.exe\n3) run.bat");
             return;
         }
         SetBusy("正在启动后台服务（" + mode + "）…");
@@ -622,24 +804,6 @@ internal sealed class PluginManagerForm : Form
         mode = "";
         detail = "";
         Exception last = null;
-
-        string exeLauncher = Path.Combine(baseDir, "大雄无限画布.exe");
-        if (File.Exists(exeLauncher))
-        {
-            try
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = exeLauncher,
-                    Arguments = "--no-browser --port=" + port,
-                    WorkingDirectory = baseDir,
-                    UseShellExecute = true
-                });
-                mode = "大雄无限画布.exe";
-                return true;
-            }
-            catch (Exception ex) { last = ex; }
-        }
 
         string bundledPython = Path.Combine(baseDir, "python", "python.exe");
         string hostScript = Path.Combine(baseDir, "plugin_host.py");
@@ -682,7 +846,25 @@ internal sealed class PluginManagerForm : Form
             }
         }
 
-        string[] batNames = new string[] { "start.bat", "run.bat" };
+        string exeLauncher = Path.Combine(baseDir, "大雄无限画布.exe");
+        if (File.Exists(exeLauncher))
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = exeLauncher,
+                    Arguments = "--no-browser --port=" + port,
+                    WorkingDirectory = baseDir,
+                    UseShellExecute = true
+                });
+                mode = "大雄无限画布.exe";
+                return true;
+            }
+            catch (Exception ex) { last = ex; }
+        }
+
+        string[] batNames = new string[] { "run.bat" };
         foreach (string batName in batNames)
         {
             string bat = Path.Combine(baseDir, batName);
@@ -703,7 +885,7 @@ internal sealed class PluginManagerForm : Form
 
         System.Text.StringBuilder sb = new System.Text.StringBuilder();
         sb.AppendLine("当前目录未找到可用启动入口。");
-        sb.AppendLine("已检查：大雄无限画布.exe / python\\python.exe + plugin_host.py / start.bat / run.bat");
+        sb.AppendLine("已检查：python\\python.exe + plugin_host.py / 大雄无限画布.exe / run.bat");
         if (last != null) sb.AppendLine("最后错误：" + last.Message);
         detail = sb.ToString().TrimEnd();
         return false;
@@ -716,7 +898,7 @@ internal sealed class PluginManagerForm : Form
         else if (startupAttempts >= 60)
         {
             startupTimer.Stop();
-            ShowError("后台服务在 30 秒内没有准备完成。\n请先手动运行 start.bat、run.bat 或 大雄无限画布.exe，确认服务可访问后再打开插件管理器。");
+            ShowError("后台服务在 30 秒内没有准备完成。\n请先手动运行 run.bat 或 大雄无限画布.exe，确认服务可访问后再打开插件管理器。");
         }
     }
 
@@ -739,6 +921,7 @@ internal sealed class PluginManagerForm : Form
             Dictionary<string, object> data;
             try { data = ApiJson("GET", "/updates"); }
             catch { data = ApiJson("GET", "/plugins"); }
+            canvasConnected = true;
             Render(data);
             string count = ValueText(data, "compatible_update_count");
             string availableCount = ValueText(data, "available_count");
@@ -1263,7 +1446,7 @@ private LocalVersionInfo InspectLocalVersions()
     private static bool Bool(Dictionary<string, object> value, string key) { object raw; return value != null && value.TryGetValue(key, out raw) && raw != null && Convert.ToBoolean(raw); }
     private int CardWidth() { return Math.Max(590, cards.ClientSize.Width - 38); }
     private void ResizeCards() { int width = CardWidth(); foreach (Control control in cards.Controls) if (control is Panel) control.Width = width; }
-    private void SetBusy(string message) { installButton.Enabled = false; status.Text = message; SetLightFore(status, Color.FromArgb(100, 116, 139)); UseWaitCursor = true; }
-    private void SetReady(string message) { installButton.Enabled = true; status.Text = message; SetLightFore(status, Color.FromArgb(17, 24, 39)); UseWaitCursor = false; }
+    private void SetBusy(string message) { installButton.Enabled = false; integrateButton.Enabled = false; status.Text = message; SetLightFore(status, Color.FromArgb(100, 116, 139)); UseWaitCursor = true; }
+    private void SetReady(string message) { installButton.Enabled = canvasConnected; integrateButton.Enabled = true; status.Text = message; SetLightFore(status, Color.FromArgb(17, 24, 39)); UseWaitCursor = false; }
     private void ShowError(string message) { SetReady("连接或操作失败"); MessageBox.Show(this, message, "大雄插件管理", MessageBoxButtons.OK, MessageBoxIcon.Error); }
 }
