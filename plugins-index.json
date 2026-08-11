@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-11T07:15:44.505141Z",
+  "generated_at": "2026-08-11T07:19:27.724138Z",
   "plugins": [
     {
       "id": "canvas-agent",
@@ -21,7 +21,7 @@
       "download_url": "https://github.com/heyu1084916812/daxiong-canvas-plugins/releases/download/canvas-agent-v2.2.48/canvas-agent-v2.2.48.zip",
       "sha256": "40e64952100d4fa24f9531988a297ef6daa29888815b8622d5901b037a23f259",
       "size": 213348,
-      "published_at": "2026-08-11T07:15:44.493393Z",
+      "published_at": "2026-08-11T07:19:27.712294Z",
       "changelog": []
     },
     {
@@ -38,7 +38,7 @@
       "download_url": "https://github.com/heyu1084916812/daxiong-canvas-plugins/releases/download/canvas-bug-fix-v1.7.0/canvas-bug-fix-v1.7.0.zip",
       "sha256": "c0023c1557fdaf875bc514ff79d119b0436829827d4a16c61af549edd8123978",
       "size": 13003,
-      "published_at": "2026-08-11T07:15:44.495288Z",
+      "published_at": "2026-08-11T07:19:27.714264Z",
       "changelog": []
     },
     {
@@ -58,7 +58,7 @@
       "download_url": "https://github.com/heyu1084916812/daxiong-canvas-plugins/releases/download/local-patch-v2.7.1/local-patch-v2.7.1.zip",
       "sha256": "d292c186e91215606ef96e0aad2b83937dc756a08cd56adbd696c0f03b99997e",
       "size": 50881,
-      "published_at": "2026-08-11T07:15:44.500999Z",
+      "published_at": "2026-08-11T07:19:27.720024Z",
       "changelog": []
     },
     {
@@ -78,7 +78,7 @@
       "download_url": "https://github.com/heyu1084916812/daxiong-canvas-plugins/releases/download/long-image-node-v1.2.0/long-image-node-v1.2.0.zip",
       "sha256": "7f3af07973415a9517c3f37fea8a1351524f91ac8a6115a3c06ec42ff9d8225c",
       "size": 24964,
-      "published_at": "2026-08-11T07:15:44.503841Z",
+      "published_at": "2026-08-11T07:19:27.722835Z",
       "changelog": []
     },
     {
@@ -96,7 +96,7 @@
       "download_url": "https://github.com/heyu1084916812/daxiong-canvas-plugins/releases/download/node-align-distribute-v1.2.1/node-align-distribute-v1.2.1.zip",
       "sha256": "ac71b2406d1865a962467b148dd8a6c4450f057eb337b959d853e8e00fb3e8f6",
       "size": 8893,
-      "published_at": "2026-08-11T07:15:44.505113Z",
+      "published_at": "2026-08-11T07:19:27.724110Z",
       "changelog": []
     }
   ]
