@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -568,7 +569,8 @@ internal sealed class PluginManagerForm : Form
             catch { data = ApiJson("GET", "/plugins"); }
             Render(data);
             string count = ValueText(data, "compatible_update_count");
-            SetReady(count.Length > 0 && count != "0" ? "发现 " + count + " 个可用更新" : "已连接 · 端口 " + port);
+            string availableCount = ValueText(data, "available_count");
+            SetReady(count.Length > 0 && count != "0" ? "发现 " + count + " 个可用更新" : (availableCount.Length > 0 && availableCount != "0" ? "仓库有 " + availableCount + " 个插件可安装" : "已连接 · 端口 " + port));
         }
         catch (Exception ex) { ShowError("插件列表读取失败：" + ex.Message); }
     }
@@ -580,14 +582,17 @@ internal sealed class PluginManagerForm : Form
         object rawPlugins;
         object[] plugins = data.TryGetValue("plugins", out rawPlugins) ? rawPlugins as object[] : null;
         if (plugins == null) plugins = new object[0];
-        foreach (object item in plugins)
+        object rawAvailable;
+        object[] availablePlugins = data.TryGetValue("available_plugins", out rawAvailable) ? rawAvailable as object[] : null;
+        if (availablePlugins == null) availablePlugins = new object[0];
+        foreach (object item in plugins.Concat(availablePlugins))
         {
             Dictionary<string, object> plugin = item as Dictionary<string, object>;
             if (plugin == null) continue;
             cards.Controls.Add(CreateCard(plugin));
         }
         RefreshSummary();
-        if (plugins.Length == 0) cards.Controls.Add(new Label { Text = "还没有安装插件。点击右上角“安装 ZIP 插件”开始使用。", AutoSize = false, Size = new Size(720, 100), TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.FromArgb(110, 120, 137), Font = new Font(Font, FontStyle.Italic) });
+        if (plugins.Length == 0 && availablePlugins.Length == 0) cards.Controls.Add(new Label { Text = "还没有安装插件。点击右上角“安装 ZIP 插件”开始使用。", AutoSize = false, Size = new Size(720, 100), TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.FromArgb(110, 120, 137), Font = new Font(Font, FontStyle.Italic) });
         ResizeCards(); cards.ResumeLayout(); ApplyThemeTree(cards);
     }
 
@@ -597,12 +602,13 @@ internal sealed class PluginManagerForm : Form
         Label name = new Label { Text = ValueText(plugin, "name"), AutoEllipsis = true, Location = new Point(18, 12), Size = new Size(card.Width - 205, 25), Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right, Font = new Font("Microsoft YaHei UI", 11.5F, FontStyle.Bold), ForeColor = Color.FromArgb(17, 24, 39), BackColor = Color.Transparent };
         bool hasUpdate = Bool(plugin, "update_available");
         bool updateCompatible = Bool(plugin, "update_compatible");
+        bool installed = Bool(plugin, "installed");
         string updateMeta = hasUpdate ? "  ·  最新 v" + ValueText(plugin, "latest_version") + (updateCompatible ? "" : "（不兼容）") : "";
         Label meta = new Label { Text = "v" + ValueText(plugin, "version") + updateMeta + "  ·  " + (ValueText(plugin, "author").Length > 0 ? ValueText(plugin, "author") : "未知作者"), Location = new Point(18, 38), Size = new Size(card.Width - 205, 18), Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right, Font = new Font("Microsoft YaHei UI", 8.3F, FontStyle.Regular), ForeColor = hasUpdate && updateCompatible ? Color.FromArgb(37, 99, 235) : Color.FromArgb(148, 163, 184), BackColor = Color.Transparent };
         Label description = new Label { Text = ValueText(plugin, "description").Length > 0 ? ValueText(plugin, "description") : "该插件没有填写说明。", Location = new Point(18, 65), Size = new Size(card.Width - 36, 20), Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right, Font = new Font("Microsoft YaHei UI", 8.8F, FontStyle.Regular), ForeColor = Color.FromArgb(71, 85, 105), AutoEllipsis = true, BackColor = Color.Transparent };
         bool enabled = Bool(plugin, "enabled");
-        bool available = Bool(plugin, "manifest_valid") && Bool(plugin, "compatible") && Bool(plugin, "backend_registered");
-        RoundedPanel toggleBlock = new RoundedPanel { Location = new Point(card.Width - 158, 10), Size = new Size(140, 42), Anchor = AnchorStyles.Top | AnchorStyles.Right, Radius = 15, BorderColor = Color.FromArgb(100, 255, 255, 255), BackColor = Color.FromArgb(235, 241, 245, 249) };
+        bool available = installed && Bool(plugin, "manifest_valid") && Bool(plugin, "compatible") && Bool(plugin, "backend_registered");
+        RoundedPanel toggleBlock = new RoundedPanel { Location = new Point(card.Width - 158, 10), Size = new Size(140, 42), Anchor = AnchorStyles.Top | AnchorStyles.Right, Radius = 15, BorderColor = Color.FromArgb(100, 255, 255, 255), BackColor = Color.FromArgb(235, 241, 245, 249), Visible = installed };
         Label toggleLabel = new Label { Text = enabled ? "已启用" : "已停用", TextAlign = ContentAlignment.MiddleLeft, Location = new Point(12, 8), Size = new Size(64, 26), Font = new Font("Microsoft YaHei UI", 8.5F, FontStyle.Bold), ForeColor = enabled ? Color.FromArgb(17, 24, 39) : Color.FromArgb(100, 116, 139), BackColor = Color.Transparent };
         SlideToggle toggle = new SlideToggle { Location = new Point(81, 8), Enabled = available };
         toggle.SetChecked(enabled);
@@ -611,13 +617,22 @@ internal sealed class PluginManagerForm : Form
         Label health = new Label { Text = healthText, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, Font = new Font("Microsoft YaHei UI", 8.5F, FontStyle.Bold), ForeColor = HealthForeground(healthText), BackColor = Color.Transparent };
         RoundedPanel actionBlock = new RoundedPanel { Location = new Point(card.Width - 362, 91), Size = new Size(344, 36), Anchor = AnchorStyles.Top | AnchorStyles.Right, Radius = 14, BackColor = Color.FromArgb(95, 255, 255, 255) };
         FlowLayoutPanel actions = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(4, 3, 4, 0), FlowDirection = FlowDirection.RightToLeft, WrapContents = false, BackColor = Color.Transparent };
-        Button healthButton = ActionButton("健康检查", delegate { ShowHealth(plugin); });
-        Button logsButton = ActionButton("查看日志", delegate { ShowLogs(plugin); });
-        Button upgradeButton = hasUpdate && updateCompatible
-            ? ActionButton("一键更新", delegate { UpdateFromRepository(plugin); })
-            : ActionButton("升级 ZIP", delegate { Upgrade(plugin); });
-        Button remove = ActionButton("卸载", delegate { Uninstall(plugin); }); remove.ForeColor = Color.FromArgb(17, 24, 39);
-        actions.Controls.Add(healthButton); actions.Controls.Add(logsButton); actions.Controls.Add(upgradeButton); actions.Controls.Add(remove);
+        if (!installed)
+        {
+            Button repositoryInstall = ActionButton(Bool(plugin, "install_compatible") ? "一键安装" : "当前版本不兼容", delegate { InstallFromRepository(plugin); });
+            repositoryInstall.Enabled = Bool(plugin, "install_compatible");
+            actions.Controls.Add(repositoryInstall);
+        }
+        else
+        {
+            Button healthButton = ActionButton("健康检查", delegate { ShowHealth(plugin); });
+            Button logsButton = ActionButton("查看日志", delegate { ShowLogs(plugin); });
+            Button upgradeButton = hasUpdate && updateCompatible
+                ? ActionButton("一键更新", delegate { UpdateFromRepository(plugin); })
+                : ActionButton("升级 ZIP", delegate { Upgrade(plugin); });
+            Button remove = ActionButton("卸载", delegate { Uninstall(plugin); }); remove.ForeColor = Color.FromArgb(17, 24, 39);
+            actions.Controls.Add(healthButton); actions.Controls.Add(logsButton); actions.Controls.Add(upgradeButton); actions.Controls.Add(remove);
+        }
         toggle.ToggleChanged += delegate { ToggleInline(plugin, toggle, toggleLabel, health); };
         toggleBlock.Controls.Add(toggleLabel); toggleBlock.Controls.Add(toggle);
         healthBlock.Controls.Add(health);
@@ -634,6 +649,7 @@ internal sealed class PluginManagerForm : Form
 
     private string HealthText(Dictionary<string, object> plugin)
     {
+        if (!Bool(plugin, "installed")) return Bool(plugin, "install_compatible") ? "仓库可安装" : "当前版本不兼容";
         if (!Bool(plugin, "manifest_valid")) return "异常 · 插件清单错误";
         if (!Bool(plugin, "compatible")) return "异常 · " + ValueText(plugin, "reason");
         if (!Bool(plugin, "enabled")) return "已停用";
@@ -724,7 +740,8 @@ internal sealed class PluginManagerForm : Form
             Dictionary<string, object> data = ApiJson("POST", "/updates/check");
             Render(data);
             string count = ValueText(data, "compatible_update_count");
-            SetReady(count.Length > 0 && count != "0" ? "发现 " + count + " 个可用更新" : "所有插件均为最新版");
+            string availableCount = ValueText(data, "available_count");
+            SetReady(count.Length > 0 && count != "0" ? "发现 " + count + " 个可用更新" : (availableCount.Length > 0 && availableCount != "0" ? "仓库有 " + availableCount + " 个插件可安装" : "所有插件均为最新版"));
         }
         catch (Exception ex) { ShowError("检查更新失败：" + ex.Message); }
     }
@@ -971,6 +988,15 @@ private LocalVersionInfo InspectLocalVersions()
             MessageBox.Show(this, "更新完成。该插件包含后端功能，请重启大雄画布后生效。", "插件更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
         else if (Bool(result, "refresh_required"))
             MessageBox.Show(this, "更新完成。刷新画布页面后生效。", "插件更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+    private void InstallFromRepository(Dictionary<string, object> plugin)
+    {
+        string name = ValueText(plugin, "name");
+        string version = ValueText(plugin, "version");
+        if (MessageBox.Show("将从插件仓库安装“" + name + "”v" + version + "。\n\n安装包会先完成安全和兼容性校验。是否继续？", "一键安装", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        Dictionary<string, object> result = null;
+        RunAction("安装 " + name, delegate { result = ApiJson("POST", "/" + Uri.EscapeDataString(ValueText(plugin, "id")) + "/install-from-repository"); });
+        if (result != null) MessageBox.Show(this, "安装完成。刷新画布后即可使用；如果插件包含后端功能，建议重启一次大雄画布。", "插件安装", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     private void ShowHealth(Dictionary<string, object> plugin)

@@ -63,6 +63,8 @@ def build_plugin(plugin_root: Path, output: Path, repository: str) -> dict:
     return {
         "id": plugin_id,
         "name": str(manifest.get("name") or plugin_id),
+        "description": str(manifest.get("description") or ""),
+        "author": str(manifest.get("author") or ""),
         "version": version,
         "min_core_version": manifest.get("min_core_version"),
         "max_core_version": manifest.get("max_core_version"),

@@ -4,7 +4,7 @@
 
 - 大雄无限画布主仓库：[hero8152/Infinite-Canvas](https://github.com/hero8152/Infinite-Canvas)
 - 插件安装包：[Releases](https://github.com/heyu1084916812/daxiong-canvas-plugins/releases)
-- Windows 桌面插件管理器：[plugin-manager](https://github.com/heyu1084916812/daxiong-canvas-plugins/tree/main/plugin-manager)
+- Windows 桌面插件管理器：[下载正式版 EXE](https://github.com/heyu1084916812/daxiong-canvas-plugins/releases/tag/plugin-manager-v1.0.0)
 
 ## 普通用户如何使用
 
@@ -17,8 +17,8 @@
 
 ### 2. 安装桌面插件管理器
 
-1. 进入 [`plugin-manager/`](https://github.com/heyu1084916812/daxiong-canvas-plugins/tree/main/plugin-manager)。
-2. 下载 `大雄插件管理.exe`。
+1. 打开[大雄插件管理 v1.0.0 正式发行版](https://github.com/heyu1084916812/daxiong-canvas-plugins/releases/tag/plugin-manager-v1.0.0)。
+2. 在“资源”中下载 `大雄插件管理.exe`，不要下载 GitHub 自动生成的 `Source code`。
 3. 把它放进大雄无限画布主目录，不要放在单独的下载目录。
 4. 双击 `大雄插件管理.exe`。
 
@@ -30,10 +30,7 @@
 
 ### 3. 第一次安装插件
 
-1. 打开本仓库的 [Releases](https://github.com/heyu1084916812/daxiong-canvas-plugins/releases)。
-2. 下载需要的插件 ZIP。
-3. 在“大雄插件管理”中点击“安装 ZIP”。
-4. 选择刚下载的 ZIP，安装后按提示刷新画布或重启大雄画布。
+插件管理器会列出仓库中尚未安装的插件，点击“一键安装”即可。只有仓库连接失败时，才需要从 [Releases](https://github.com/heyu1084916812/daxiong-canvas-plugins/releases) 手动下载插件 ZIP，再通过“安装 ZIP”导入。
 
 每个插件都是独立安装包，可以按需安装，不需要一次安装全部插件。
 

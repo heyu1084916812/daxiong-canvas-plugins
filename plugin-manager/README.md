@@ -4,9 +4,10 @@
 
 ## 下载和安装
 
-1. 在本目录打开 `大雄插件管理.exe`，点击 GitHub 文件页面右上方的下载按钮。
-2. 把下载的 `大雄插件管理.exe` 放进大雄无限画布主目录。
-3. 双击运行。
+1. 打开[大雄插件管理 v1.0.0 正式发行版](https://github.com/heyu1084916812/daxiong-canvas-plugins/releases/tag/plugin-manager-v1.0.0)。
+2. 在“资源”中下载 `大雄插件管理.exe`，不要下载 `Source code`。
+3. 把下载的 `大雄插件管理.exe` 放进大雄无限画布主目录。
+4. 双击运行。
 
 请勿直接在浏览器下载目录或临时目录中运行。插件管理器需要与画布启动文件处于同一主目录。
 
@@ -40,10 +41,9 @@ plugins/
 
 ## 第一次安装插件
 
-1. 从仓库 [Releases](https://github.com/heyu1084916812/daxiong-canvas-plugins/releases) 下载插件 ZIP。
-2. 点击插件管理器右上角的“安装 ZIP”。
-3. 选择下载的 ZIP。
-4. 根据提示刷新画布或重启大雄画布。
+插件管理器会显示仓库中尚未安装的插件。点击“一键安装”即可完成下载、校验和安装。
+
+如果仓库连接失败，仍可从 [Releases](https://github.com/heyu1084916812/daxiong-canvas-plugins/releases) 下载插件 ZIP，再点击“安装 ZIP”手动导入。
 
 ## 后续一键更新
 

@@ -7,6 +7,7 @@ on:
     paths:
       - "plugins/**"
       - "tools/build_releases.py"
+      - "plugin-manager/**"
       - ".github/workflows/publish-plugins.yml"
 
 permissions:
@@ -48,6 +49,31 @@ jobs:
               gh release create "$tag" "build/releases/$asset" --title "$name v$version" --notes "大雄无限画布插件自动发布。"
             fi
           done
+
+      - name: Publish plugin manager release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          manager_version=$(tr -d '\r\n ' < plugin-manager/VERSION)
+          manager_tag="plugin-manager-v$manager_version"
+          manager_asset='plugin-manager/大雄插件管理.exe'
+          manager_hash='plugin-manager/大雄插件管理.exe.sha256.txt'
+          expected_hash=$(awk '{print $1}' "$manager_hash")
+          actual_hash=$(sha256sum "$manager_asset" | awk '{print $1}')
+          if [ "$expected_hash" != "$actual_hash" ]; then
+            echo 'Plugin manager SHA-256 file does not match the executable.' >&2
+            exit 1
+          fi
+          if gh release view "$manager_tag" >/dev/null 2>&1; then
+            mkdir -p "build/existing/$manager_tag"
+            gh release download "$manager_tag" --pattern '大雄插件管理.exe*' --dir "build/existing/$manager_tag"
+            if ! cmp -s "$manager_asset" "build/existing/$manager_tag/大雄插件管理.exe"; then
+              echo "Release $manager_tag already exists but the executable changed. Bump plugin-manager/VERSION." >&2
+              exit 1
+            fi
+          else
+            gh release create "$manager_tag" "$manager_asset" "$manager_hash" --title "大雄插件管理 v$manager_version" --notes "Windows 桌面插件管理器。支持从插件仓库一键安装和一键更新。"
+          fi
 
       - name: Ensure updates branch exists
         env:
