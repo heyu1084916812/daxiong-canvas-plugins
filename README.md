@@ -12,8 +12,8 @@
 
 从[大雄无限画布主仓库](https://github.com/hero8152/Infinite-Canvas)获取画布。以下两种启动形式都兼容：
 
-- **便携 EXE 版**：主目录中有 `大雄无限画布.exe`。
-- **原始启动器版**：主目录中有 `plugin_host.py`，并通过 `start.bat`、`run.bat` 或 Python 启动。
+- 兼容用户自己封装的exe版
+- **原始启动器版**：主目录中有 `plugin_host.py`，并通过 `run.bat` 或 Python 启动。
 
 ### 2. 安装桌面插件管理器
 
