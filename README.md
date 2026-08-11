@@ -18,9 +18,9 @@
 ### 2. 安装桌面插件管理器
 
 1. 打开[大雄插件管理 v1.0.0 正式发行版](https://github.com/heyu1084916812/daxiong-canvas-plugins/releases/tag/plugin-manager-v1.0.0)。
-2. 在“资源”中下载 `大雄插件管理.exe`，不要下载 GitHub 自动生成的 `Source code`。
+2. 在“资源”中下载 `Daxiong-Plugin-Manager.exe`，不要下载 GitHub 自动生成的 `Source code`。
 3. 把它放进大雄无限画布主目录，不要放在单独的下载目录。
-4. 双击 `大雄插件管理.exe`。
+4. 双击 `Daxiong-Plugin-Manager.exe`（也可以自行改名为“大雄插件管理.exe”）。
 
 插件管理器会先连接已经运行的大雄画布；如果后台尚未运行，会自动寻找并使用：
 

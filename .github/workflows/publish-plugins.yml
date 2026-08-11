@@ -58,22 +58,37 @@ jobs:
           manager_tag="plugin-manager-v$manager_version"
           manager_asset='plugin-manager/大雄插件管理.exe'
           manager_hash='plugin-manager/大雄插件管理.exe.sha256.txt'
+          publish_dir='build/plugin-manager-release'
+          publish_asset="$publish_dir/Daxiong-Plugin-Manager.exe"
+          publish_hash="$publish_dir/Daxiong-Plugin-Manager.exe.sha256.txt"
           expected_hash=$(awk '{print $1}' "$manager_hash")
           actual_hash=$(sha256sum "$manager_asset" | awk '{print $1}')
           if [ "$expected_hash" != "$actual_hash" ]; then
             echo 'Plugin manager SHA-256 file does not match the executable.' >&2
             exit 1
           fi
+          mkdir -p "$publish_dir"
+          cp "$manager_asset" "$publish_asset"
+          printf '%s  %s\n' "$actual_hash" 'Daxiong-Plugin-Manager.exe' > "$publish_hash"
           if gh release view "$manager_tag" >/dev/null 2>&1; then
             mkdir -p "build/existing/$manager_tag"
-            gh release download "$manager_tag" --pattern '大雄插件管理.exe*' --dir "build/existing/$manager_tag"
-            if ! cmp -s "$manager_asset" "build/existing/$manager_tag/大雄插件管理.exe"; then
-              echo "Release $manager_tag already exists but the executable changed. Bump plugin-manager/VERSION." >&2
-              exit 1
+            if gh release download "$manager_tag" --pattern 'Daxiong-Plugin-Manager.exe' --dir "build/existing/$manager_tag"; then
+              if ! cmp -s "$publish_asset" "build/existing/$manager_tag/Daxiong-Plugin-Manager.exe"; then
+                echo "Release $manager_tag already exists but the executable changed. Bump plugin-manager/VERSION." >&2
+                exit 1
+              fi
+              gh release upload "$manager_tag" "$publish_hash" --clobber
+            else
+              gh release upload "$manager_tag" "$publish_asset" "$publish_hash"
             fi
           else
-            gh release create "$manager_tag" "$manager_asset" "$manager_hash" --title "大雄插件管理 v$manager_version" --notes "Windows 桌面插件管理器。支持从插件仓库一键安装和一键更新。"
+            gh release create "$manager_tag" "$publish_asset" "$publish_hash" --title "大雄插件管理 v$manager_version" --notes "Windows 桌面插件管理器。支持从插件仓库一键安装和一键更新。"
           fi
+          for stale_asset in default.exe exe.sha256.txt; do
+            if gh release view "$manager_tag" --json assets --jq '.assets[].name' | grep -Fxq "$stale_asset"; then
+              gh release delete-asset "$manager_tag" "$stale_asset" --yes
+            fi
+          done
 
       - name: Ensure updates branch exists
         env:
