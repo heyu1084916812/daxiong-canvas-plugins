@@ -2,8 +2,16 @@
   "schema_version": 2,
   "id": "canvas-bug-fix",
   "name": "画布 Bug 修复",
-  "description": "修复画布循环、整理选中、工作流资产库双向传输、普通画布 LLM 面板及多选 Alt 拖拽复制问题",
-  "version": "1.8.1",
+  "description": "分项修复普通/智能画布的复制粘贴、图片组复制、等比例缩放、解散还原、输入图顺序同步、日志图片回画布，以及循环、整理选中和工作流资产等问题。",
+  "version": "1.9.0",
+  "release_notes": [
+    "所有节点支持 Ctrl+C/Ctrl+V，并正确区分系统剪贴板图片。",
+    "图片组内单图支持 Ctrl+C 和 Alt+拖动复制，连接与撤销保持正确。",
+    "图片节点缩放保持原图比例。",
+    "解散图片组恢复建组前的大小、比例、位置、连接与输入引用。",
+    "输入图排序同步到上传/生成节点和实际 API 引用顺序。",
+    "日志图片缺失时自动补回画布，并新增发送到画布按钮。"
+  ],
   "author": "local",
   "min_core_version": "2026.08.04",
   "max_core_version": null,
@@ -16,7 +24,13 @@
         "web/arrange-selected-classic-fix.js",
         "web/classic-loop-connected-only-fix.js",
         "web/classic-llm-pane-resize-fix.js",
-        "web/alt-drag-duplicate-classic-fix.js"
+        "web/alt-drag-duplicate-classic-fix.js",
+        "web/copy-paste-fix-classic.js",
+        "web/hover-cursor-classic-fix.js",
+        "web/image-aspect-resize-classic-fix.js",
+        "web/group-ungroup-restore-classic-fix.js",
+        "web/input-reference-order-classic-fix.js",
+        "web/log-to-canvas-classic-fix.js"
       ]
     },
     "smart_canvas": {
@@ -25,7 +39,13 @@
         "web/arrange-selected-fix.js",
         "web/smart-workflow-library-fix.js",
         "web/smart-workflow-asset-drop-fix.js",
-        "web/alt-drag-duplicate-smart-fix.js"
+        "web/alt-drag-duplicate-smart-fix.js",
+        "web/copy-paste-fix-smart.js",
+        "web/hover-cursor-smart-fix.js",
+        "web/image-aspect-resize-smart-fix.js",
+        "web/group-ungroup-restore-smart-fix.js",
+        "web/input-reference-order-smart-fix.js",
+        "web/log-to-canvas-smart-fix.js"
       ]
     }
   },

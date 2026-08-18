@@ -22,6 +22,7 @@
         requestedIds.map(id => nodes.find(item => item.id === id)).forEach(collectSource);
         if(!sourceNodes.length) return {dragCopy:node, selectedCopies:[], copies:[]};
 
+        pushUndo();
         const idMap = new Map();
         const copies = sourceNodes.map(source => {
             const copy = cloneNode(source, 0, 0);
@@ -63,16 +64,6 @@
         event.preventDefault();
         event.stopPropagation();
         let dragTarget = node;
-        if(event.altKey){
-            setKnifeMode(false);
-            const duplicated = duplicateSelectedForAltDrag(node);
-            selected.clear();
-            duplicated.selectedCopies.forEach(id => selected.add(id));
-            dragTarget = duplicated.dragCopy;
-            sanitizeConnections();
-            syncGeneratorInputs();
-            render();
-        }
         const isGroup = dragTarget.type === 'group' || dragTarget.type === 'promptGroup';
         const collected = new Map();
         const collect = current => {
@@ -87,7 +78,7 @@
             [...selected].forEach(id => collect(nodes.find(item => item.id === id)));
         }
         const children = [...collected.values()];
-        dragNode = {node:dragTarget, children, sx:event.clientX, sy:event.clientY, ox:dragTarget.x, oy:dragTarget.y};
+        dragNode = {node:dragTarget, children, sx:event.clientX, sy:event.clientY, ox:dragTarget.x, oy:dragTarget.y, moved:false, copyOnMove:Boolean(event.altKey), copyPreserveConnections:Boolean(event.shiftKey), copyFactory:duplicateSelectedForAltDrag};
         document.body.classList.add('canvas-node-drag');
         window.onmousemove = onNodeDrag;
         window.onmouseup = endDrag;
@@ -101,6 +92,7 @@
         duplicateNodesForAltDrag = duplicateSelectedForAltDrag;
         startNodeDrag = fixedStartNodeDrag;
         window.CanvasBugFixAltDragClassic = {duplicateSelectedForAltDrag, fixedStartNodeDrag};
+        document.documentElement.dataset.canvasBugFixAltDragClassicRevision = 'deferred-v2';
         setStatus('active');
     }
 
