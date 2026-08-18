@@ -3,7 +3,7 @@
   "id": "canvas-bug-fix",
   "name": "画布 Bug 修复",
   "description": "修复画布循环、整理选中、工作流资产库双向传输、普通画布 LLM 面板及多选 Alt 拖拽复制问题",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "author": "local",
   "min_core_version": "2026.08.04",
   "max_core_version": null,
