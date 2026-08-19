@@ -55,7 +55,7 @@
 | 插件 | ID | 当前版本 |
 |---|---|---:|
 | 设计大师 | `canvas-agent` | 2.2.48 |
-| 局部提取与图像融合 | `local-patch` | 2.7.1 |
+| 局部提取与图像融合 | `local-patch` | 2.7.2 |
 | 长图节点 | `long-image-node` | 1.2.0 |
 | 画布 Bug 修复 | `canvas-bug-fix` | 1.9.0 |
 | 节点对齐 | `node-align-distribute` | 1.2.1 |

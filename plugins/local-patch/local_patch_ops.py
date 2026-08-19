@@ -72,13 +72,25 @@ def compute_padded_rect(
         raise LocalPatchValidationError("选区尺寸无效")
     if rect["x"] < 0 or rect["y"] < 0 or rect["x"] + rect["w"] > image_width or rect["y"] + rect["h"] > image_height:
         raise LocalPatchValidationError("选区越界")
-    pad_x = round(rect["w"] * ratio)
-    pad_y = round(rect["h"] * ratio)
-    left = max(0, rect["x"] - pad_x)
-    top = max(0, rect["y"] - pad_y)
-    right = min(image_width, rect["x"] + rect["w"] + pad_x)
-    bottom = min(image_height, rect["y"] + rect["h"] + pad_y)
-    return {"x": left, "y": top, "w": right - left, "h": bottom - top}
+    # Keep the extracted patch at the same aspect ratio as the selection.  A
+    # simple boundary clamp removes padding from only one axis/side and changes
+    # the ratio whenever the selection is close to an image edge.  Instead,
+    # size the context window uniformly and slide it back inside the image.
+    desired_scale = 1.0 + 2.0 * ratio
+    available_scale = min(image_width / rect["w"], image_height / rect["h"])
+    scale = min(desired_scale, available_scale)
+    target_width = min(image_width, max(rect["w"], round(rect["w"] * scale)))
+    target_height = min(image_height, max(rect["h"], round(rect["h"] * scale)))
+
+    def place_axis(start: int, length: int, target_length: int, image_length: int) -> int:
+        ideal = start - (target_length - length) // 2
+        minimum = max(0, start + length - target_length)
+        maximum = min(start, image_length - target_length)
+        return min(max(ideal, minimum), maximum)
+
+    left = place_axis(rect["x"], rect["w"], target_width, image_width)
+    top = place_axis(rect["y"], rect["h"], target_height, image_height)
+    return {"x": left, "y": top, "w": target_width, "h": target_height}
 
 
 def crop_local_patch(

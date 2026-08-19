@@ -3,7 +3,7 @@
   "id": "local-patch",
   "name": "局部提取与图像融合",
   "description": "提取原图局部区域，处理后无缝融合回原图",
-  "version": "2.7.1",
+  "version": "2.7.2",
   "author": "local",
   "icon": "assets/icon.svg",
   "min_core_version": "2026.07.13",

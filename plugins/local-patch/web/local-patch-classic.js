@@ -760,6 +760,6 @@
 
   installMenuEntry(); installClassicEditorExtractMode(); installClassicPreviewCompareButton();
   render();
-  console.info('[local-patch] classic canvas plugin 2.7.1 loaded and mounted');
+  console.info('[local-patch] classic canvas plugin 2.7.2 loaded and mounted');
   }
 })();

@@ -749,6 +749,6 @@
     return value;
   };
 
-  installMenuCard();installEditorExtractMode();installBlankSelectionClear();render();console.info('[local-patch] smart canvas plugin 2.7.1 loaded and mounted');
+  installMenuCard();installEditorExtractMode();installBlankSelectionClear();render();console.info('[local-patch] smart canvas plugin 2.7.2 loaded and mounted');
   }
 })();
