@@ -3,7 +3,7 @@
   "id": "canvas-agent",
   "name": "设计大师",
   "description": "在普通画布和智能画布中提供对话、分析、生成与多图任务编排",
-  "version": "2.2.48",
+  "version": "2.2.49",
   "author": "mufanmu / local migration",
   "min_core_version": "2026.07.15",
   "max_core_version": null,

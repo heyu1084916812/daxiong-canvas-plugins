@@ -1,18 +1,19 @@
-<button id="agentToggle" class="agent-toggle" type="button" data-canvas-interactive="true"><i data-lucide="bot"></i><span data-i18n="smart.agentPanel">设计大师</span></button>
-<button id="smartSendAgentBtn" class="minimap-arrange-btn canvas-agent-send-selected" type="button" data-canvas-interactive="true" title="发送至设计大师" aria-label="发送至设计大师" hidden><i data-lucide="bot"></i><span>发送至设计大师</span></button>
-        <aside id="agentPanel" class="agent-panel" data-canvas-interactive="true">
-            <div class="agent-dock-resizer" id="agentDockResizer" title="拖拽调整宽度"></div>
+<button id="agentToggle" class="agent-toggle" type="button" data-canvas-interactive="true" aria-controls="agentPanel" aria-label="打开设计大师"><i data-lucide="bot" aria-hidden="true"></i><span data-i18n="smart.agentPanel">设计大师</span></button>
+<button id="smartSendAgentBtn" class="minimap-arrange-btn canvas-agent-send-selected" type="button" data-canvas-interactive="true" title="发送至设计大师" aria-label="发送至设计大师" aria-controls="agentPanel" hidden><i data-lucide="bot" aria-hidden="true"></i><span>发送至设计大师</span></button>
+        <aside id="agentPanel" class="agent-panel" data-canvas-interactive="true" role="complementary" aria-label="设计大师 Agent" aria-describedby="agentPanelDescription">
+            <span id="agentPanelDescription" class="sr-only">在画布中理解需求、规划并执行生图任务</span>
+            <div class="agent-dock-resizer" id="agentDockResizer" title="拖拽或用方向键调整宽度" role="separator" aria-orientation="vertical" aria-label="调整设计大师面板宽度" aria-valuemin="300" tabindex="0"></div>
             <div class="asset-head">
                 <div class="asset-title"><i data-lucide="bot"></i><span data-i18n="smart.agentPanel">设计大师</span><small class="agent-brand-subtitle">你的画布助手</small></div>
-                <button id="agentNewChatBtn" class="asset-mini-btn" type="button" title="新建对话"><i data-lucide="plus"></i></button>
-                <button id="agentChatListBtn" class="asset-mini-btn" type="button" title="对话列表"><i data-lucide="list"></i></button>
+                <button id="agentNewChatBtn" class="asset-mini-btn" type="button" title="新建对话" aria-label="新建对话"><i data-lucide="plus" aria-hidden="true"></i></button>
+                <button id="agentChatListBtn" class="asset-mini-btn" type="button" title="对话列表" aria-label="打开对话列表" aria-controls="agentChatListPanel" aria-haspopup="dialog"><i data-lucide="list" aria-hidden="true"></i></button>
                 <div class="agent-more-wrap">
-                    <button id="agentMoreBtn" class="asset-mini-btn" type="button" title="更多操作"><i data-lucide="more-horizontal"></i></button>
-                    <div id="agentMorePanel" class="agent-more-panel" hidden>
-                        <button id="agentDeleteChatBtn" class="agent-more-item" type="button"><i data-lucide="trash-2"></i><span>删除当前对话</span></button>
+                    <button id="agentMoreBtn" class="asset-mini-btn" type="button" title="更多操作" aria-label="更多操作" aria-controls="agentMorePanel" aria-haspopup="menu"><i data-lucide="more-horizontal" aria-hidden="true"></i></button>
+                    <div id="agentMorePanel" class="agent-more-panel" role="menu" aria-label="对话操作" hidden>
+                        <button id="agentDeleteChatBtn" class="agent-more-item" type="button" role="menuitem"><i data-lucide="trash-2" aria-hidden="true"></i><span>删除当前对话</span></button>
                     </div>
                 </div>
-                <button id="agentCloseBtn" class="asset-mini-btn" type="button" title="关闭侧栏"><i data-lucide="x"></i></button>
+                <button id="agentCloseBtn" class="asset-mini-btn" type="button" title="关闭侧栏" aria-label="关闭设计大师侧栏"><i data-lucide="x" aria-hidden="true"></i></button>
             </div>
             <div class="agent-models" style="display:none">
                 <select id="agentChatProvider" class="agent-select"></select>
@@ -43,67 +44,69 @@
                     <option value="4">4</option>
                 </select>
             </div>
-            <div id="agentChatListPanel" class="agent-chat-list-panel" hidden></div>
-            <section id="agentSkillManager" class="agent-skill-manager" hidden>
-                <div class="agent-skill-manager-head"><strong>Skill 预设</strong><button id="agentSkillManagerClose" type="button" title="关闭"><i data-lucide="x"></i></button></div>
+            <div id="agentChatListPanel" class="agent-chat-list-panel" role="dialog" aria-label="设计大师对话列表" hidden></div>
+            <section id="agentSkillManager" class="agent-skill-manager" role="dialog" aria-labelledby="agentSkillManagerTitle" aria-describedby="agentSkillManagerHint" tabindex="-1" hidden>
+                <div class="agent-skill-manager-head"><strong id="agentSkillManagerTitle">Skill 预设</strong><button id="agentSkillManagerClose" type="button" title="关闭" aria-label="关闭 Skill 预设"><i data-lucide="x" aria-hidden="true"></i></button></div>
+                <span id="agentSkillManagerHint" class="sr-only">管理可在输入框中用斜杠调用的 Skill 预设</span>
                 <div class="agent-skill-editor">
-                    <input id="agentSkillName" type="text" maxlength="80" placeholder="Skill 名称，例如：电商主图">
-                    <input id="agentSkillDescription" type="text" maxlength="300" placeholder="简短说明（可选）">
-                    <textarea id="agentSkillContent" rows="7" maxlength="100000" placeholder="输入需要 Agent 始终遵循的完整 Skill 指令……"></textarea>
+                    <input id="agentSkillName" type="text" maxlength="80" aria-label="Skill 名称" placeholder="Skill 名称，例如：电商主图">
+                    <input id="agentSkillDescription" type="text" maxlength="300" aria-label="Skill 简短说明" placeholder="简短说明（可选）">
+                    <textarea id="agentSkillContent" rows="7" maxlength="100000" aria-label="Skill 完整指令" placeholder="输入需要 Agent 始终遵循的完整 Skill 指令……"></textarea>
                     <div class="agent-skill-editor-actions"><button id="agentSkillCancelEdit" type="button">清空</button><button id="agentSkillSave" class="primary" type="button">保存 Skill</button></div>
                 </div>
                 <div class="agent-skill-list-title"><span>已保存</span><small>输入 / 可快速调用</small></div>
-                <div id="agentSkillPresetList" class="agent-skill-preset-list"></div>
+                <div id="agentSkillPresetList" class="agent-skill-preset-list" role="list" aria-label="已保存的 Skill"></div>
             </section>
-            <div id="agentMessages" class="agent-messages"></div>
+            <div id="agentMessages" class="agent-messages" role="region" aria-label="设计大师对话消息"></div>
+            <span id="agentStatusLive" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></span>
             <div class="agent-input-area">
                 <div class="agent-onebox">
                     <div id="agentAttachRow" class="agent-attach-row"></div>
-                    <div id="agentInput" class="agent-input-editor" contenteditable="true" role="textbox" aria-multiline="true" data-i18n-placeholder="smart.agentPlaceholder" data-placeholder="输入需求，/ 调用 Skill；点画布图片可插入图片字符..."></div>
+                    <div id="agentInput" class="agent-input-editor" contenteditable="true" role="textbox" aria-multiline="true" aria-label="输入设计需求" aria-placeholder="输入需求，/ 调用 Skill；点画布图片可插入图片字符..." aria-autocomplete="list" aria-expanded="false" data-i18n-placeholder="smart.agentPlaceholder" data-placeholder="输入需求，/ 调用 Skill；点画布图片可插入图片字符..."></div>
                     <div class="agent-toolbar">
                         <div class="agent-toolbar-left">
                             <div id="agentInputModeSwitch" class="agent-input-mode-switch" role="group" aria-label="输入模式">
-                                <button type="button" class="agent-input-mode-btn active" data-agent-input-mode="agent" aria-pressed="true"><i data-lucide="bot"></i><span>设计大师</span></button>
-                                <button type="button" class="agent-input-mode-btn" data-agent-input-mode="image" aria-pressed="false"><i data-lucide="image"></i><span>图像</span></button>
+                                <button type="button" class="agent-input-mode-btn active" data-agent-input-mode="agent" aria-pressed="true" aria-label="设计大师模式"><i data-lucide="bot" aria-hidden="true"></i><span>设计大师</span></button>
+                                <button type="button" class="agent-input-mode-btn" data-agent-input-mode="image" aria-pressed="false" aria-label="图像直连模式"><i data-lucide="image" aria-hidden="true"></i><span>图像</span></button>
                             </div>
-                            <button id="agentAttachBtn" class="agent-toolbar-icon" type="button" data-i18n-title="smart.agentAttach" title="添加图片或 Skill"><i data-lucide="paperclip"></i></button>
+                            <button id="agentAttachBtn" class="agent-toolbar-icon" type="button" data-i18n-title="smart.agentAttach" title="添加图片或 Skill" aria-label="添加图片或 Skill"><i data-lucide="paperclip" aria-hidden="true"></i></button>
                             <div class="agent-toolbar-dropdown-wrap">
-                                <button id="agentModelBtn" class="agent-toolbar-icon agent-model-icon-btn" type="button" title="模型选择">
-                                    <i data-lucide="sparkles" class="agent-chip-icon"></i>
+                                <button id="agentModelBtn" class="agent-toolbar-icon agent-model-icon-btn" type="button" title="模型选择" aria-label="选择理解模型和生图模型" aria-controls="agentModelPanel" aria-haspopup="dialog" aria-expanded="false">
+                                    <i data-lucide="sparkles" class="agent-chip-icon" aria-hidden="true"></i>
                                     <span id="agentModelLabel" class="sr-only">模型</span>
                                 </button>
-                                <div id="agentModelPanel" class="agent-dropdown-panel agent-model-panel" hidden>
-                                    <div class="agent-dropdown-row" data-agent-chat-model-row><label>理解</label><div class="agent-dropdown-selects" id="agentChatModelSelects"></div></div>
-                                    <div class="agent-dropdown-row"><label>生图</label><div class="agent-dropdown-selects" id="agentGenSelects"></div></div>
+                                <div id="agentModelPanel" class="agent-dropdown-panel agent-model-panel" role="dialog" aria-label="模型选择" hidden>
+                                    <div class="agent-dropdown-row" data-agent-chat-model-row role="group" aria-labelledby="agentChatModelGroupLabel"><span id="agentChatModelGroupLabel" class="agent-dropdown-label">理解</span><div class="agent-dropdown-selects" id="agentChatModelSelects"></div></div>
+                                    <div class="agent-dropdown-row" role="group" aria-labelledby="agentGenModelGroupLabel"><span id="agentGenModelGroupLabel" class="agent-dropdown-label">生图</span><div class="agent-dropdown-selects" id="agentGenSelects"></div></div>
                                     <div class="agent-model-default-row">
                                         <button id="agentSaveModelDefaultsBtn" class="agent-quick-btn primary" type="button">设为默认</button>
                                         <span id="agentModelDefaultHint" class="agent-model-default-hint">可设为默认，下次打开自动使用</span>
                                     </div>
                                 </div>
                             </div>
-                            <button id="agentSkillManagerBtn" class="agent-toolbar-chip agent-skill-chip" type="button" title="Skill 预设">
-                                <i data-lucide="book-open" class="agent-chip-icon"></i>
+                            <button id="agentSkillManagerBtn" class="agent-toolbar-chip agent-skill-chip" type="button" title="Skill 预设" aria-label="展开 Skill 预设" aria-controls="agentSkillManager" aria-haspopup="dialog" aria-expanded="false">
+                                <i data-lucide="book-open" class="agent-chip-icon" aria-hidden="true"></i>
                                 <span>Skills</span>
-                                <i data-lucide="chevron-down"></i>
+                                <i data-lucide="chevron-down" aria-hidden="true"></i>
                             </button>
-                            <button id="agentRunModeBtn" class="agent-toolbar-chip agent-runmode-chip is-auto" type="button" data-mode="auto" title="全自动：理解后直接规划并执行（全托管）" aria-pressed="false">
-                                <i data-lucide="bot" class="agent-chip-icon"></i>
+                            <button id="agentRunModeBtn" class="agent-toolbar-chip agent-runmode-chip is-auto" type="button" data-mode="auto" title="全自动：理解后直接规划并执行（全托管）" aria-label="切换全自动或半自动模式" aria-pressed="false">
+                                <i data-lucide="bot" class="agent-chip-icon" aria-hidden="true"></i>
                                 <span data-run-mode-label>全自动</span>
                             </button>
                         </div>
                         <div class="agent-toolbar-right">
-                            <button id="agentSendBtn" class="agent-send-btn" type="button" data-i18n-title="smart.agentSend" title="发送"><i data-lucide="send"></i></button>
+                            <button id="agentSendBtn" class="agent-send-btn" type="button" data-agent-action="idle" data-i18n-title="smart.agentSend" title="发送" aria-label="发送或停止当前任务"><i data-lucide="send" aria-hidden="true"></i></button>
                         </div>
                     </div>
                 </div>
-                <div id="agentSkillSlashPanel" class="agent-mention-panel agent-skill-slash-panel" hidden></div>
-                <div class="agent-input-resize" id="agentInputResize"></div>
+                <div id="agentSkillSlashPanel" class="agent-mention-panel agent-skill-slash-panel" role="listbox" aria-label="Skill 快速调用列表" hidden></div>
+                <div class="agent-input-resize" id="agentInputResize" role="separator" aria-orientation="horizontal" aria-label="调整输入框高度" aria-valuemin="56" tabindex="0"></div>
             </div>
-            <input id="agentImageInput" type="file" accept="image/*,.md,.markdown,.txt" multiple hidden>
-            <div id="agentRefConfirmPanel" class="agent-ref-confirm" hidden>
+            <input id="agentImageInput" type="file" accept="image/*,.md,.markdown,.txt" multiple aria-label="上传参考图或 Skill 文件" hidden>
+            <div id="agentRefConfirmPanel" class="agent-ref-confirm" role="dialog" aria-modal="true" aria-labelledby="agentRefConfirmTitle" hidden>
                 <div class="agent-ref-confirm-head">
-                    <span class="agent-ref-confirm-title">参考图任务确认</span>
-                    <button id="agentRefConfirmCancel" class="agent-ref-confirm-close" type="button"><i data-lucide="x"></i></button>
+                    <span id="agentRefConfirmTitle" class="agent-ref-confirm-title">参考图任务确认</span>
+                    <button id="agentRefConfirmCancel" class="agent-ref-confirm-close" type="button" aria-label="关闭参考图任务确认"><i data-lucide="x" aria-hidden="true"></i></button>
                 </div>
                 <div class="agent-ref-confirm-body" id="agentRefConfirmBody"></div>
                 <div class="agent-ref-confirm-actions">

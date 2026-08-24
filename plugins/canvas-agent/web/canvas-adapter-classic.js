@@ -147,6 +147,73 @@
         if(node.url) return [{url:node.url,name:node.name||'image',kind:'image'}];
         return [];
     }
+    // Canvas Snapshot v1: a deliberately small, redacted summary for Agent
+    // planning.  Do not return live nodes or image URLs/full prompts.
+    function snapshotRedactText(value, maxLength=180){
+        let text=String(value||'').replace(/[\r\n\t]+/g,' ').replace(/\s{2,}/g,' ').trim();
+        if(!text) return '';
+        text=text
+            .replace(/(?:https?|file):\/\/[^\s]+/gi,'[redacted-url]')
+            .replace(/(?:data|blob):[^\s]+/gi,'[redacted-data]')
+            .replace(/(?:[A-Z]:\\|\\\\)[^\s,;，。；]+/gi,'[redacted-path]')
+            .replace(/\/(?:Users|home|tmp|var\/folders)\/[^\s,;，。；]+/gi,'[redacted-path]')
+            .replace(/(?:api[_ -]?key|authorization|bearer|token|secret)\s*[:=：]\s*[^\s,;，。；]+/gi,'[redacted-secret]')
+            .replace(/\bbearer\s+[A-Za-z0-9._~+/=-]+/gi,'[redacted-secret]')
+            .replace(/\b(?:sk|rk)-[A-Za-z0-9_-]{12,}\b/g,'[redacted-secret]');
+        if(text.length>maxLength) text=text.slice(0,maxLength).trimEnd()+'…';
+        return text;
+    }
+    function snapshotSettings(node){
+        const raw=node?.resolvedSettings||node?.runSettings||node?.settings||{};
+        const out={};
+        const aliases={
+            provider_id:['provider_id','providerId','apiProvider'], model:['model'], engine:['engine'], apiKind:['apiKind'],
+            ratio:['ratio'], resolution:['resolution'], quality:['quality'], count:['count'],
+            customRatio:['customRatio','custom_ratio'], customSize:['customSize','custom_size']
+        };
+        Object.entries(aliases).forEach(([key,names])=>{
+            const value=names.map(name=>raw?.[name] ?? node?.[name]).find(value=>value!==undefined&&value!==null&&value!=='');
+            if(value!==undefined&&value!==null&&value!==''){
+                out[key]=typeof value==='string' ? snapshotRedactText(value,80) : (typeof value==='number' ? value : String(value));
+            }
+        });
+        return out;
+    }
+    function snapshotNodeSummary(node){
+        const prompt=node?.professionalPrompt||node?.promptDraftText||node?.prompt||node?.text||'';
+        return {
+            id:snapshotRedactText(node?.id||'',120), type:node?.type==='smart-image'||node?.type==='agent-generation'?'image':snapshotRedactText(node?.type||'',48), title:snapshotRedactText(node?.title||'',120),
+            position:{x:Number(node?.x)||0,y:Number(node?.y)||0},
+            status:snapshotRedactText(node?.status||node?.runStatus||node?.agentRunStatus||'',48),
+            promptExcerpt:snapshotRedactText(prompt), settings:snapshotSettings(node),
+            imageCount:Array.isArray(node?.images) ? node.images.filter(Boolean).length : ((node?.url||node?.image) ? 1 : 0)
+        };
+    }
+    function getCanvasSnapshot(options={}){
+        const scope=String(options?.scope||'selection').toLowerCase();
+        const includeNeighbors=options?.includeNeighbors!==false;
+        const selected=[...new Set((selectionIds()||[]).map(String).filter(Boolean))];
+        const base={schemaVersion:1,canvasId:snapshotRedactText(canvasId,120),kind:'classic',capturedAt:Date.now(),scope,selection:selected.map(id=>snapshotRedactText(id,120)),nodes:[],connections:[],warnings:[]};
+        // Never silently scrape all nodes.  Only the explicitly selected scope
+        // is supported by this v1 adapter.
+        if(scope!=='selection') { base.warnings.push('仅支持选中内容快照'); return base; }
+        if(!selected.length) return base;
+        const included=new Set(selected.filter(id=>!!findNode(id)));
+        const selectedSet=new Set(included);
+        const edges=Array.isArray(allConnections())?allConnections():[];
+        if(includeNeighbors){
+            edges.forEach(edge=>{
+                const from=String(edge?.from||''),to=String(edge?.to||'');
+                if(selectedSet.has(from)&&findNode(to)) included.add(to);
+                if(selectedSet.has(to)&&findNode(from)) included.add(from);
+            });
+        }
+        base.selection=selected.filter(id=>included.has(id)).map(id=>snapshotRedactText(id,120));
+        base.nodes=[...included].map(id=>snapshotNodeSummary(findNode(id))).filter(item=>item.id);
+        base.connections=edges.filter(edge=>included.has(String(edge?.from||''))&&included.has(String(edge?.to||''))).map(edge=>({from:snapshotRedactText(edge.from,120),to:snapshotRedactText(edge.to,120),kind:snapshotRedactText(edge.kind||'flow',48)}));
+        if(options?.includePromptText===true) base.warnings.push('提示词仅提供截断脱敏摘要');
+        return base;
+    }
     function applyNodeImages(nodeOrId,images){
         const id = typeof nodeOrId==='string' ? nodeOrId : (nodeOrId?.id || '');
         const node = id ? (findNode(id) || (typeof nodeOrId==='object' ? nodeOrId : null)) : (typeof nodeOrId==='object' ? nodeOrId : null);
@@ -215,6 +282,7 @@
         canvasKind:()=> 'classic',
         getCanvasId:()=>canvasId,
         getSelection:()=>({schemaVersion:2,nodeIds:selectionIds()}),
+        getCanvasSnapshot,
         getNode:id=>{const n=findNode(id);return n?{schemaVersion:2,...clone(n)}:null;},
         getNodeImages,
         applyNodeImages,
