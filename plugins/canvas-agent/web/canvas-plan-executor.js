@@ -2,6 +2,24 @@
     'use strict';
     const clone = v => JSON.parse(JSON.stringify(v));
     const normalizeRefUrl = (u='') => String(u || '').trim().split('#')[0].split('?')[0];
+    const fusionTermIsNegated = (text='', index=0) => {
+        const t = String(text || '');
+        const before = t.slice(Math.max(0, Number(index) - 24), Number(index));
+        return /(?:不|未|无|不要|不需要|无需|不能|不可|不得|禁止|严禁|避免|勿|取消|去掉|不再|不是|并非|而非|不做|不进行)\s*(?:再|将|把|让|进行|做|使用|去)?\s*$/.test(before);
+    };
+    const hasPositiveFusionIntent = (text='') => {
+        const t = String(text || '');
+        const termRe = /组合|结合|合成|融合|拼在一起|合并|合在一起|放在一起|拼合|合成为|合成一张|合成一图|同框|追逐|打架|互动|对峙|拥抱|共同出现在|一张完整画面/g;
+        let match;
+        while((match = termRe.exec(t))){
+            if(!fusionTermIsNegated(t, match.index)) return true;
+        }
+        const pairRe = /(?:把|将)这(?:两|二|三|四|五|六|七|八|九|十|\d+)张[^。；;\n]{0,24}(?:放在一起|拼在一起|组合|结合|合成|融合|合并|同框|一张完整画面)/g;
+        while((match = pairRe.exec(t))){
+            if(!fusionTermIsNegated(t, match.index)) return true;
+        }
+        return false;
+    };
     const findExistingImageNodeId = (host, url='') => {
         const target = normalizeRefUrl(url);
         if(!target) return '';
@@ -45,7 +63,9 @@
             workflowId: context.workflowId || '',
             inputArtifactIds: Array.isArray(step.input_artifact_ids) ? step.input_artifact_ids.slice() : [],
             outputArtifactId: String(step.output_artifact_id || ''),
-            dependsOnSteps: Array.isArray(step.depends_on_steps) ? step.depends_on_steps.slice() : []
+            dependsOnSteps: Array.isArray(step.depends_on_steps) ? step.depends_on_steps.slice() : [],
+            // 保存实际执行时的依赖类型，便于节点审计和重跑时恢复。
+            dependency_mode: stepDependencyMode(step)
         };
     }
     function stepDependsOnPrevious(step){
@@ -60,7 +80,7 @@
         if(raw === 'fusion' || raw === 'product_reference' || raw === 'none') return raw;
         if(stepDependsOnPrevious(step)){
             const prompt = String(step?.professional_prompt || step?.prompt || '');
-            if(/融合|组合|结合|合成|拼合|合并/.test(prompt)) return 'fusion';
+            if(hasPositiveFusionIntent(prompt)) return 'fusion';
             return 'product_reference';
         }
         return 'none';
@@ -230,6 +250,7 @@
             resolution: resolved.resolution,
             quality: resolved.quality,
             count,
+            _apiResolutionUserSet: resolved.resolution && resolved.resolution !== 'auto',
             customRatio: resolved.custom_ratio,
             customSize: resolved.custom_size,
             agentSource: {...meta, requestedSettings: requested, resolvedSettings: resolved}
@@ -307,7 +328,8 @@
                     ratio: resolved.ratio,
                     resolution: resolved.resolution,
                     quality: resolved.quality,
-                    count
+                    count,
+                    _apiResolutionUserSet: resolved.resolution && resolved.resolution !== 'auto'
                 });
             }catch(_){}
         }
@@ -503,6 +525,107 @@
         }
         return entry.result;
     }
+
+    function hasMultiLevelDependencies(steps){
+        const byId = new Map((steps || []).map((step, index) => [String(step?.id || `step_${index + 1}`), index]));
+        return (steps || []).some((step, index) => {
+            if(!stepDependsOnPrevious(step)) return false;
+            const refs = Array.isArray(step.depends_on_steps) ? step.depends_on_steps : [];
+            return refs.some(ref => {
+                const depIndex = byId.get(String(ref));
+                return Number.isInteger(depIndex) && stepDependsOnPrevious(steps[depIndex]);
+            });
+        });
+    }
+
+    function validateDependencyReferences(steps){
+        const ids = new Set((steps || []).map((step, index) => String(step?.id || `step_${index + 1}`)));
+        for(const step of (steps || [])){
+            const refs = Array.isArray(step?.depends_on_steps) ? step.depends_on_steps : [];
+            for(const ref of refs){
+                if(!ids.has(String(ref))) throw new Error(`依赖步骤不存在：${String(ref)}`);
+            }
+        }
+    }
+
+    // Execute explicit multi-level dependency graphs. Independent steps in the
+    // same topological layer still run in parallel; a failed prerequisite marks
+    // every downstream step as skipped instead of running it with stale inputs.
+    async function executeCanvasPlanDag(host, plan, context, workflowId, base){
+        const sourceSteps = (plan.steps || []).filter(step => ['generate_image','edit_image'].includes(step.operation));
+        validateDependencyReferences(sourceSteps);
+        const byId = new Map(sourceSteps.map((step, index) => [String(step.id || `step_${index + 1}`,), {step,index}]));
+        const depsOf = item => {
+            const step = item.step;
+            if(Array.isArray(step.depends_on_steps) && step.depends_on_steps.length){
+                return step.depends_on_steps.map(id => byId.get(String(id))).filter(Boolean);
+            }
+            if(stepDependsOnPrevious(step)) return sourceSteps.slice(0, item.index).map((s, i) => byId.get(String(s.id || `step_${i + 1}`))).filter(Boolean);
+            return [];
+        };
+        const workflow = {id:workflowId, conversationId:context.conversationId||'', messageId:context.messageId||'', status:'creating_nodes', canvasKind:host.canvasKind(), plan:clone(plan), nodeIds:[], activeTaskIds:[], logs:context.logs || (context.logs=[]), createdAt:Date.now(), updatedAt:Date.now()};
+        const entries = [];
+        const done = new Set();
+        const failed = new Set();
+        let guard = 0;
+        while(done.size + failed.size < sourceSteps.length && guard++ < sourceSteps.length + 2){
+            const ready = sourceSteps.map((step,index)=>({step,index})).filter(item => {
+                const key = String(item.step.id || `step_${item.index + 1}`);
+                if(done.has(key) || failed.has(key)) return false;
+                return depsOf(item).every(dep => {
+                    const depKey = String(dep.step.id || `step_${dep.index + 1}`);
+                    return done.has(depKey) || failed.has(depKey);
+                });
+            });
+            if(!ready.length) throw new Error('依赖图存在循环或缺失的步骤引用');
+            const blocked = ready.filter(item => depsOf(item).some(dep => failed.has(String(dep.step.id || `step_${dep.index + 1}`))));
+            blocked.forEach(item => {
+                const key = String(item.step.id || `step_${item.index + 1}`);
+                failed.add(key);
+                const packed = {stepId:key,index:item.index,phase:'dependent',step:item.step,nodeIds:[],runNodeId:'',outputNodeId:'',result:{status:'failed',images:[],error:'前置步骤失败，已跳过本步骤'}};
+                entries.push(packed);
+                pushLog(context, `步骤${item.index + 1} 已跳过：前置步骤失败`, 'error', {stepId:key});
+            });
+            const runnable = ready.filter(item => !blocked.includes(item));
+            if(!runnable.length) continue;
+            const tx = host.beginTransaction(`AI Agent dependency layer ${guard}`);
+            const layer = [];
+            for(const item of runnable){
+                const deps = depsOf(item).filter(dep => done.has(String(dep.step.id || `step_${dep.index + 1}`)));
+                const depImages = deps.flatMap(dep => {
+                    const entry = entries.find(e => e.stepId === String(dep.step.id || `step_${dep.index + 1}`));
+                    return (entry?.result?.images || []).filter(img => img?.url).map(img => ({...img, nodeId:img.nodeId || entry.outputNodeId || entry.runNodeId || ''}));
+                });
+                const mode = stepDependencyMode(item.step);
+                const explicit = Array.isArray(item.step.references) ? item.step.references.filter(r => r?.url) : [];
+                const refs = mode === 'fusion' ? mergeReferences(explicit, depImages) : (mode === 'product_reference' ? mergeReferences(explicit, depImages.slice(0,1)) : explicit);
+                item.step.references = refs;
+                item.step.operation = refs.length || stepDependsOnPrevious(item.step) ? 'edit_image' : 'generate_image';
+                const anchor = {x:base.x + guard * 80, y:base.y + item.index * 420};
+                const entry = host.canvasKind() === 'classic' ? await executeClassic(host,item.step,{...context,workflowId},anchor) : await executeSmart(host,item.step,{...context,workflowId},anchor);
+                const packed = {...entry,stepId:String(item.step.id || `step_${item.index + 1}`),index:item.index,phase:deps.length?'dependent':'independent',step:item.step};
+                layer.push(packed); entries.push(packed); workflow.nodeIds.push(...entry.nodeIds);
+            }
+            host.commitTransaction(tx);
+            await host.saveCanvas();
+            if(plan.auto_run !== false){
+                await Promise.all(layer.map(entry => runOneEntryWithRetry(host,entry,workflowId,context,`步骤${entry.index + 1}`)));
+            }
+            layer.forEach(entry => {
+                const key = entry.stepId;
+                if((entry.result?.images || []).some(img => img?.url)) done.add(key); else failed.add(key);
+            });
+            await host.saveCanvas();
+        }
+        const anyFailed = entries.some(e => e.result?.status === 'failed' || !(e.result?.images || []).some(img => img?.url));
+        workflow.status = plan.auto_run === false ? 'ready' : (anyFailed ? 'completed_with_errors' : 'completed');
+        workflow.updatedAt = Date.now(); workflow.logs = context.logs;
+        pushLog(context, `工作流结束：${workflow.status}`, anyFailed ? 'warn' : 'ok');
+        await host.saveCanvas();
+        host.selectNodes(workflow.nodeIds); host.focusNodes(workflow.nodeIds);
+        return {workflow,entries:entries.sort((a,b)=>a.index-b.index),logs:context.logs};
+    }
+
     async function executeCanvasPlan(plan, context = {}){
         try{ refNodeCache.clear(); }catch(_){ }
         const host = window.CanvasAgentHost;
@@ -525,8 +648,12 @@
         };
         const entries = [];
         try{
-            const base = host.getViewportAnchor({preferSelection: true});
             const steps = (plan.steps || []).filter(step => ['generate_image', 'edit_image'].includes(step.operation));
+            validateDependencyReferences(steps);
+            if(hasMultiLevelDependencies(steps)){
+                return await executeCanvasPlanDag(host, plan, context, workflowId, host.getViewportAnchor({preferSelection:true}));
+            }
+            const base = host.getViewportAnchor({preferSelection: true});
             const independent = [];
             const dependent = [];
             steps.forEach((step, index) => {
@@ -627,7 +754,15 @@
                         step.operation = 'edit_image';
                         const mountedCount = Array.isArray(step.references) ? step.references.filter(r => r?.url).length : 0;
                         if(mode === 'product_reference'){
-                            pushLog(context, `产品参考步骤挂载参考图 ${mountedCount} 张（产品定稿 + 指定原图，保留原提示词）`, 'info', {stepId: step.id || `step_${index + 1}`, mountedCount, beforeRefCount, prevCount: mountedCount});
+                            // `step.references` already contains the generated product anchor at
+                            // this point.  `beforeRefCount` is the number of explicit user refs
+                            // captured before that injection, so it reliably distinguishes a
+                            // product-only chain from "产品定稿 + 指定原图".
+                            const hasExplicitUserRefs = beforeRefCount > 0;
+                            const logMessage = hasExplicitUserRefs
+                                ? `产品参考步骤挂载参考图 ${mountedCount} 张（产品定稿 + 指定原图，保留原提示词）`
+                                : `产品参考步骤挂载前序产物 ${mountedCount} 张（产品定稿，保留原提示词）`;
+                            pushLog(context, logMessage, 'info', {stepId: step.id || `step_${index + 1}`, mountedCount, beforeRefCount, prevCount: mountedCount, hasExplicitUserRefs});
                         }else{
                             pushLog(context, `融合步骤挂载参考图 ${mountedCount} 张（前序成功图，保留原提示词）`, 'info', {stepId: step.id || `step_${index + 1}`, mountedCount, beforeRefCount, prevCount: mountedCount});
                         }

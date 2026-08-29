@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import uuid
 from pathlib import Path
@@ -23,6 +24,10 @@ class CanvasAgentPlugin:
         self.llm = host["capabilities"]["llm.canvas.v1"]
         self.request_model = host["capabilities"]["models.canvas_llm_request.v1"]
         self.skills_path = self.data_dir / "skills.json"
+        # 对话状态不能只放浏览器 localStorage：大型 Skill、长策划和多轮任务
+        # 很容易触发浏览器 5MB 配额，从而出现 F5 后对话丢失。状态文件按画布隔离，
+        # 仍完全位于插件自己的 data 目录，不触碰用户画布 JSON 或其他插件数据。
+        self.state_dir = self.data_dir / "conversation-state"
 
     def _require_enabled(self) -> None:
         if not self.host["is_plugin_enabled"](self.plugin_id):
@@ -82,6 +87,21 @@ class CanvasAgentPlugin:
         @router.get("/health")
         async def health():
             return self.health_check()
+
+        @router.get("/state/{canvas_id}")
+        async def get_state(canvas_id: str):
+            self._require_enabled()
+            state = self.load_state(canvas_id)
+            return {"canvas_id": canvas_id, "state": state}
+
+        @router.put("/state/{canvas_id}")
+        async def put_state(canvas_id: str, payload: Dict[str, Any]):
+            self._require_enabled()
+            state = payload.get("state") if isinstance(payload, dict) else None
+            if not isinstance(state, dict):
+                raise HTTPException(status_code=400, detail="state 必须是对象")
+            saved = self.save_state(canvas_id, state)
+            return {"ok": True, "canvas_id": canvas_id, "saved_at": saved}
 
         app.include_router(router)
 
@@ -233,6 +253,56 @@ class CanvasAgentPlugin:
         temp_path.write_text(json.dumps(skills, ensure_ascii=False, indent=2), encoding="utf-8")
         temp_path.replace(self.skills_path)
 
+    @staticmethod
+    def _safe_canvas_id(canvas_id: str) -> str:
+        value = str(canvas_id or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value):
+            raise HTTPException(status_code=400, detail="非法画布标识")
+        return value
+
+    def _state_path(self, canvas_id: str) -> Path:
+        return self.state_dir / f"{self._safe_canvas_id(canvas_id)}.json"
+
+    def load_state(self, canvas_id: str) -> Dict[str, Any] | None:
+        path = self._state_path(canvas_id)
+        with self.lock:
+            if not path.is_file():
+                return None
+            try:
+                value = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                return None
+        return value if isinstance(value, dict) else None
+
+    def save_state(self, canvas_id: str, state: Dict[str, Any]) -> int:
+        path = self._state_path(canvas_id)
+        # 防止异常页面把无限大的对象写入插件数据。正常的多对话/大 Skill
+        # 状态仍有充足余量，且此限制只约束单个画布的单个快照。
+        try:
+            serialized = json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=f"状态无法序列化: {exc}") from exc
+        if len(serialized.encode("utf-8")) > 24 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="单个画布的 Agent 对话状态超过 24MB")
+        saved_at = int(state.get("_savedAt") or int(time.time() * 1000))
+        state = dict(state)
+        state["_savedAt"] = saved_at
+        with self.lock:
+            self.state_dir.mkdir(parents=True, exist_ok=True)
+            # 并发保存时只接受更新的快照，避免网络延迟把较早状态覆盖较新状态。
+            current = None
+            if path.is_file():
+                try:
+                    current = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError, TypeError):
+                    current = None
+            if isinstance(current, dict) and int(current.get("_savedAt") or 0) > saved_at:
+                return int(current.get("_savedAt") or saved_at)
+            temp_path = path.with_suffix(".json.tmp")
+            temp_path.write_text(json.dumps(state, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+            temp_path.replace(path)
+        return saved_at
+
     @classmethod
     def _clean_skill(cls, payload: Dict[str, Any], current: Dict[str, Any] | None = None) -> Dict[str, Any]:
         now = int(time.time() * 1000)
@@ -297,6 +367,7 @@ class CanvasAgentPlugin:
 
     def on_enable(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.state_dir.mkdir(parents=True, exist_ok=True)
         if not self.skills_path.exists():
             self._write_skills_unlocked([])
         self.enabled = True

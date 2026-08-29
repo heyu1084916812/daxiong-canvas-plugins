@@ -58,12 +58,23 @@ const agentHost = window.CanvasAgentHost || null;
 let agentGhostAttachments = [];
 let agentComposerSyncing = false;
 let agentLastSelectionSig = '';
+// 生成任务会让宿主自动选中新输出节点；这种程序化选中不能被当成
+// 用户主动选图，否则任务完成后会把上一轮结果偷偷塞回输入框。
+let agentSuppressSelectionGhostSyncUntil = 0;
+// 轮询只服务于 Ctrl/Shift 框选这类“先变选区、后没有节点 click”的手势。
+// 普通的节点点击由 agentSelectionGhostClickHandler 立即处理；没有用户手势
+// 的选区变化一律视为宿主程序行为，不得自动插入参考图。
+let agentSelectionGestureUntil = 0;
 // 刚确认过的选区签名：避免确认后轮询立刻又把同一选区刷回灰态；
 // 但再次点击同一张图时会主动清掉，允许同图重复插入。
 let agentGhostConfirmedSig = '';
 let agentComposerCaret = null;
 // 灰态预选插入锚点：点画布选图时固定，确认时仍插在“选图前的光标”，不跟 focus/click 跑到末尾
 let agentGhostInsertCaret = null;
+// 同一次 Output 图片点击会经过 pointerdown / pointerup / click；只允许其中一个阶段写入灰态芯片。
+let agentClassicOutputCaptureUntil = 0;
+// 鼠标一次选图会依次触发 pointerup 与 click；后者不能覆盖前者已合并的 Shift/Ctrl 多选结果。
+let agentLastSelectionPointerUp = {nodeId:'', until:0};
 
 function agentIsComposerEl(el=agentInput){
     return !!(el && el.getAttribute && el.getAttribute('contenteditable') === 'true');
@@ -616,7 +627,7 @@ function agentRebuildComposerFromState(text=''){
     agentComposerSyncing = true;
     try{
         agentInput.innerHTML = '';
-        const value = String(text || '');
+        const value = agentSanitizeComposerDraft(text);
         if(value){
             const parts = value.split('\n');
             parts.forEach((line, i) => {
@@ -655,6 +666,14 @@ function agentClearComposer({keepGhost=false}={}){
 }
 function agentGetInputValue(){ return agentGetComposerText(); }
 function agentSetInputValue(text){ agentRebuildComposerFromState(text); }
+function agentSanitizeComposerDraft(value=''){
+    // 旧版曾在保存时把图片字符的可见文案（例如“参考图1×”）当作普通草稿。
+    // 它既不是用户输入，也不携带 url/nodeId；恢复后会成为隐藏的伪参考并污染下一次发送。
+    const text = String(value || '')
+        .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+        .replace(/^[ \t]+|[ \t]+$/g, '');
+    return /^(?:参考图\s*\d+\s*×?\s*)+$/.test(text) ? '' : text;
+}
 function agentComposerBeforeCaretText(){
     if(!agentIsComposerEl()){
         const val = agentInput?.value || '';
@@ -763,6 +782,7 @@ async function pollAgentLlmTask(taskId){
 
 // ==================== AI Agent 侧边面板 ====================
 const AGENT_STORAGE_PREFIX = 'smart_agent_v1:';
+const AGENT_STATE_API = '/api/plugins/canvas-agent/state';
 // 跨画布记住理解/生图模型默认值，避免每次打开都重新选择
 const AGENT_MODEL_DEFAULTS_KEY = 'smart_agent_v1:__model_defaults__';
 const AGENT_SKILL_MAX_BYTES = 512 * 1024;
@@ -773,87 +793,16 @@ const AGENT_LLM_IMAGE_MAX = 8;
 const AGENT_GEN_MAX_PER_MSG = 24; // B0+: 支持 5主图+8详情 等真实大批量套图，不再静默截断到 8
 const AGENT_MSG_MAX = 60;
 const AGENT_NL = String.fromCharCode(10);
-const AGENT_FORMAT_INSTRUCTION = `你是「画布生图 Agent」的规划大脑（阶段2）。
-
-你会收到：
-- 用户原话/要求
-- Skill（若有）
-- 阶段1 LLM 已经直出的「理解内容」
-
-工作方式（必须按这个顺序）：
-1) 以策划内容为事实基础，再结合用户原话与 Skill 校准
-2) 输出规划（目标、步骤顺序、依赖、参考图角色、参数）
-3) 为每一个步骤写好对应的完整中文提示词（提示词在本阶段就定稿）
-4) 输出结构化 JSON 计划
-5) 停止。真正拉节点/生图由执行层完成，你不要二次执行，也不要输出假操作
-
-只返回原始 JSON，不要 markdown。
-
-JSON：
-{"reply":"先用自然语言说明你的规划结论与执行顺序","options":[],"prompts":[],"shared_style":"","plan":{"goal":"目标","steps_summary":["步骤1","步骤2"],"constraints":["比例/画质/数量等"]},"generations":[{"id":"step_1","title":"步骤标题","type":"three_view|main|detail|variant|edit|fusion|other","role":"product_hero|main|detail|variant|edit|fusion|other","prompt":"该步骤完整可直接生图的中文提示词","count":1,"ratio":"","resolution":"","use_last_outputs":false,"use_attachments":false,"attachment_indices":[],"depends_on_previous":false,"dependency_mode":"none","notes":"本步目的与参考图角色：如 参考图1=产品图，参考图2=风格图"}]}
-
-硬性规则：
-- generations 是执行层唯一真相。有多少张/多少步，就输出多少个 generation 项。
-- 若提供了【唯一结构化任务单】，generations 必须严格按任务单顺序展开；type/count/ratio/resolution 不得自行判断或改写。
-- 默认每步 count=1。只有用户明确要求“同一步骤一次出N张相同构图”时才允许 count>1。
-- “五种表情/五张主图/八张详情”= 多个 generation 项，不是一个 generation 的 count=5/8。
-- 绝不能只在 reply 说“将通过5个独立步骤”，却只返回 1 条 generation。
-- 多步 generations 的 prompt 必须互不相同；禁止复制同一段提示词到每一步。连续故事每格写清不同剧情动作。
-- 换装/多套衣服/多表情/多姿势：必须 N 个 generation（N=用户数量），每个 count=1；每条 prompt 都要是完整可直接生图的中文视觉描述，不能只写服装名或表情名。
-- 换装任务每条 prompt 固定包含：参考图人物身份锁定（五官/发型/眼镜/肤色）+ 姿势锁定 + 背景锁定 + 本套具体服装（款式/颜色/材质/版型/配饰）+ 写实光影与画质；只改衣服，不改脸和姿势。
-- 阶段1若只给了服装方向，阶段2必须把它们扩写成完整 prompt，不能原样照抄短标签。
-- reply 里也要简要列出每步标题与提示词要点，方便用户在执行前检查。
-- 用户说“一张/一幅”时，对应 generation 的 count 必须为 1，不要因参考图有两张就把 count 写成 2。
-- 用户说“生成一只猫/画一只狗”这类明确主体请求时，直接给可执行 generations，不要只回复询问句，更不要把询问句写进 prompt。
-- 每一步都必须自带完整、纯净、可直接生图的 prompt，并填写 ratio/resolution（如 1:1、2k）；用户写了就必须填。
-- prompt 只写视觉内容，不要写“步骤N/第N张/1比例/本张专属表情”等系统话术。
-- 用户上传了参考图时，相关步骤 use_attachments=true，执行层会创建/连线参考图；不要把“参考图一/图1”只写在文字里却不设 use_attachments。
-- 参考图编号由你在规划时完成：按输入框从左到右固定为 参考图1、参考图2、参考图3...（与用户放入顺序一致，不可重排）。
-- 你必须根据用户原话给每张参考图标注角色（产品图/风格图/实拍图/其他），并写进 plan.steps_summary 或 notes；同时在每步 generations 里用 attachment_indices 精确指向要用的编号（0-based：参考图1→0，参考图2→1）。
-- 例：用户先放产品、后放风格，并说“这是一款猫粮产品...参考图二的风格” → 参考图1=产品图 attachment_indices 含 0；参考图2=风格图 attachment_indices 含 1；相关步骤 use_attachments=true, attachment_indices=[0,1]。
-- 例：用户说两张都是产品实拍 → 参考图1/2 都是产品图，相关步骤 attachment_indices=[0,1]，不要把第2张误标成风格。
-- 例：用户说参考图1和2是产品、参考图3是风格 → attachment_indices 按该步需要组合，如主图常用 [0,1,2] 或 [0,2]。
-- 规划层可用“参考图1=产品图，参考图2=风格图”；但 generations.prompt（真正生图提示词）只写本步连线顺序的“图一/图二”，禁止写“上传的产品图/上传的参考图/参考图1（产品图）”这类词。
-- Skill 只负责规划与提示词；执行层严格按你输出的 attachment_indices 连线。用户未要求中间产物时，主图详情直接使用用户参考图，depends_on_previous=false。若用户明确要求“先生成中间图，再用生成图和某些原参考图继续”，后续必须 depends_on_previous=true、dependency_mode=product_reference，并在 attachment_indices 中保留用户点名的原参考图；执行器会把前序生成图与这些原参考图合并。
-- 同一类主体可挂多张参考图（如多张黑猫图）。按输入框从左到右顺序编号：参考图1/2/3...；改图时必须 use_attachments=true，并用 attachment_indices 精确指向对应编号。
-- 例：用户插入两张黑猫参考图后说“变成白猫”且无“分别” → 可 1 个 generation，use_attachments=true, attachment_indices=[0,1]。
-- 若用户说“分别/各自/每张”或“变成白猫，变成蓝猫”这类一对一改图：必须输出 N 个 generation（N=参考图数或目标数），每个 count=1，且 attachment_indices 只含一张（如 [0]、[1]），禁止把多张参考图塞进同一步做融合。
-- 一对一独立改图时，每一步都是独立生图任务：该步 prompt 只描述本步自己的参考主体与修改结果，禁止写“严格参考第2张/第二张参考图/全局图序”。attachment_indices 负责连线，不要把执行层编号写进视觉提示词。
-- prompt 必须是纯净可直接生图的中文视觉描述，禁止写“本张为第N/M张”“重点表现：”“步骤N”“独立变体”“严格参考第N张参考图”等系统话术。
-- 有统一风格时写 shared_style，并原样前置到需要统一的每条 prompt。
-- 参数：用户原文优先；用户没写的比例/画质/数量留给执行层用 Agent 输入框补。
-- 改图：必须本轮提供参考图并 use_attachments=true（可配合 attachment_indices）；禁止默认参考上一轮结果。prompt 只写修改意图+保持不变部分。
-- 能明确执行时直接给完整 generations；只有真缺关键信息才 options 提问。
-- 【只发参考图】用户本轮只提供了参考图、没有明确文字要求且没有启用 Skill 时：
-  1) generations 必须为空数组（禁止自行猜测并开跑生图）
-  2) reply 必须用自然语言询问用户想对参考图做什么
-  3) options 给出 3~6 个常见方向供点选（如：改风格、改表情/姿势、做表情包、电商主图、换背景、自定义说明）
-  4) 等用户补充要求后再规划 generations
-- 若本轮启用了 Skill，则 Skill 内容就是预设好的任务要求；即使用户只放参考图没有输入文字，也必须直接按“参考图 + Skill”完成策划、规划和执行，不得询问用户要做什么。
-- 不要发明用户没要求的分镜动画序列。
-
-示例：
-用户：五种表情（开心、大笑、疑惑、喜悦、害羞）
-→ 5 个 generation，每个 count=1，dependency_mode=none，prompt 分别写对应表情。
-
-用户：先白底，再5主图1:1，再8详情9:16，2K
-→ 1 个产品定稿 + 5 个主图 + 8 个详情；后续页 depends_on_previous=true, dependency_mode=product_reference；每步完整 prompt。
-- dependency_mode 只能填写 none、product_reference、fusion；禁止使用 reference 等近义值。
-
-用户：Skill + 参考图1产品图 + 参考图2风格图，做5主图+8详情
-→ 13 个 generation；每步 use_attachments=true, attachment_indices=[0,1], depends_on_previous=false, dependency_mode=none；
-→ prompt 写清图一（产品外观一致）与图二（风格/色调/留白），不要依赖前序生成图；不要写“上传的产品三视图”。
-`;
 // 阶段1：给用户看的策划正文 + 给程序用的紧凑任务单；两者分离，避免执行层再次猜语义。
 const AGENT_UNDERSTAND_INSTRUCTION = `阶段1是 Skill 驱动的完整策划阶段。
 
 当本轮启用了 Skill：
 1) Skill 的角色定位、工作方法、页面结构、文案规则和合规规则是本轮不可覆盖的约束；不要把 Skill 当成风格参考，也不要用“画布生图 Agent”替换 Skill 的专业身份。
 2) 画布 Agent 只负责阶段调度和后续节点执行；不得把 Skill 内容压缩成普通的“需求理解/参考图理解/提示词方案”摘要。
-3) 必须按 Skill 自己规定的输出格式完整策划。若 Skill 规定了逐页字段，每一页都必须逐项输出；至少保留页面作用、画面内容、版式结构、文案层级、AI 图片生成提示词和文案排版说明（Skill 有更多字段时全部保留）。
-4) 必须单独写出采用的角色定位、不可变约束、用户参数覆盖结果、参考图角色、产品依据和执行依赖。若用户是在还原既有产品而当前缺少产品图/三视图，必须明确标记并停止正式生图；若用户明确要求从 Logo、色卡等创建一个全新产品，则必须标记为“概念产品设计”，先生成产品定稿，后续只以该定稿为产品依据。
+3) 按 Skill 自己规定的输出格式完成策划，但不要把任何通用模板硬套到 Skill 上。Skill 是风格预设、单图规则、套图模板或电商页面规范时，分别按其实际内容输出；只有 Skill 明确声明的字段才需要保留，不能因为没有“页面作用”等固定标题就判定失败。策划正文必须真正落到本轮用户任务：列出要交付的成果/步骤、每项的独立目标和最终画面/提示词方向；不能只复述 Skill 的角色、规则或约束。
+4) 单独写出能够执行本轮任务的角色/约束、用户参数、参考图角色、产品依据和执行依赖（能从 Skill 或用户要求确定的才写）。若用户是在还原既有产品而当前缺少产品图/三视图，必须明确标记并停止正式生图；若用户明确要求从 Logo、色卡等创建一个全新产品，则必须标记为“概念产品设计”，先生成产品定稿，后续只以该定稿为产品依据。
 5) 用户明确指定的数量、比例、画质、模型和语言覆盖 Skill 默认值；角色、产品一致性、转化逻辑和输出字段不能被覆盖。
-6) 若 Skill 要求“视觉整体定位、统一风格提示词、统一负面提示词”，正文在 AGENT_TASK_SPEC 前必须逐字使用这三个标题并分别给出非空内容；即使逐页已经写过，也必须在正文中集中汇总，禁止改成近义标题或省略。
+6) 若 Skill 明确要求全局视觉约束，尽量在正文和 AGENT_TASK_SPEC.global_contract 中保留；标题可以使用 Skill 自己的命名，不要求固定中文标题。只有任务单显式提供 required_fields 时，才按这些字段做结构检查。
 
 当本轮没有 Skill：按用户要求输出简洁但完整的自然语言策划。无论是否有 Skill，正文末尾都必须附加唯一的 AGENT_TASK_SPEC 任务单；deliverables 只描述已确认的成果类型、数量、比例和画质，global_contract 仅逐字镜像正文的三项全局约束，供完整性校验和后续无损绑定使用，不能替代正文。不要输出 generations，不要假装已经拉节点或生图。
 
@@ -889,6 +838,7 @@ const AGENT_DIRECT_PLAN_INSTRUCTION = `阶段2是已确认策划到执行任务�
 - Skill 要求 5 主图、8 详情等结构而用户只明确要求 5 张主图时，只输出 5 张主图，但每张仍完整遵守 Skill 对主图的全部约束。
 - 多页套图必须逐页写不同的完整 prompt；不能复制同一个 prompt，也不能把页面提纲当成 prompt。
 - 有参考图时，按输入顺序编号为参考图1、参考图2……；attachment_indices 使用 0-based 索引精确绑定。prompt 中用执行节点顺序的“图一/图二”说明产品与风格关系。
+- artifact_* 以及其它内部产物 ID 仅允许出现在 plan.artifacts、input_artifact_ids、output_artifact_id 等结构字段中；严禁写入 generation.prompt、professionalPrompt、plannedPrompt、notes、reply 或任何用户可见文本。提示词中需要指代这些产物时，只能按本步实际输入顺序写“参考图一/参考图二……”或自然语言描述，不能输出 artifact_1、artifact_step_1_output 等内部标识。
 - 用户没有明确要求依赖前序生成图时，各步骤保持并行：depends_on_previous=false、dependency_mode="none"。
 - 只有用户明确要求“先生成 A，再用 A 生成 B”或融合时才设置前序依赖。
 - 信息不足但仍能依据 Skill 和参考图合理完成时直接规划，不要询问；只有缺少不可推断的关键输入时才返回 options，且 generations=[]。
@@ -902,6 +852,11 @@ let agentThinkingStage = ''; // understand | plan | ''
 let agentBypassThinkingNext = false;
 let agentSaveTimer = null;
 let agentState = null;
+let agentLocalStateCacheDisabled = false;
+let agentStateBackendHydrated = false;
+let agentStateBackendHydrating = false;
+let agentStateBackendSyncing = false;
+let agentStateBackendQueued = null;
 let agentMentionIdx = -1;
 let agentSkillSlashIdx = -1;
 let agentSkillPresets = [];
@@ -1175,11 +1130,24 @@ function normalizePrompts(prompts){
             return t ? {prompt:t, count:1, use_last_outputs:false, use_attachments:false, status:'pending'} : null;
         }
         if(p && typeof p === 'object' && typeof p.prompt === 'string' && p.prompt.trim()){
+            const modeRaw = String(p.dependency_mode || p.dependencyMode || '').trim().toLowerCase();
+            const dependsOnPrevious = !!(p.depends_on_previous || p.use_previous_results)
+                || modeRaw === 'product_reference' || modeRaw === 'fusion';
             const normalized = {
+                id:String(p.id || '').trim(),
+                title:String(p.title || p.name || '').trim(),
+                type:agentNormalizeTaskType(p.type || p.kind || p.role || 'other'),
+                role:String(p.role || '').trim(),
                 prompt:p.prompt.trim(),
                 count:Math.max(1, Math.min(8, Number(p.count) || 1)),
+                ratio:p.ratio || p.aspect_ratio || '',
+                resolution:p.resolution || p.size || '',
                 use_last_outputs:!!p.use_last_outputs,
                 use_attachments:!!p.use_attachments,
+                depends_on_previous: dependsOnPrevious,
+                dependency_mode: dependsOnPrevious
+                    ? agentNormalizeDependencyMode(modeRaw, p.prompt)
+                    : 'none',
                 status:p.status || 'pending'
             };
             // attachment_indices: 指定该 prompt 只使用哪些附件作为参考图（0-based 索引数组）
@@ -1188,11 +1156,60 @@ function normalizePrompts(prompts){
                 normalized.attachment_indices = p.attachment_indices
                     .filter(i => Number.isFinite(Number(i)) && Number(i) >= 0)
                     .map(i => Math.floor(Number(i)));
+                if(normalized.attachment_indices.length) normalized.use_attachments = true;
             }
+            if(Array.isArray(p.depends_on_steps)) normalized.depends_on_steps = p.depends_on_steps.slice();
+            if(Array.isArray(p.input_artifact_ids)) normalized.input_artifact_ids = p.input_artifact_ids.slice();
+            if(p.output_artifact_id) normalized.output_artifact_id = String(p.output_artifact_id);
             return normalized;
         }
         return null;
     }).filter(p => p);
+}
+
+// 兼容早期规划协议：旧模型有时只返回 prompts，而当前节点执行器只接收
+// generations。这个桥只搬运字段，不扩写提示词、不改变步骤顺序或参考图编号。
+// 因而全自动可继续执行，半自动仍保留原 prompts 确认卡。
+function agentPromptsToGenerations(prompts){
+    return normalizePrompts(prompts).map((prompt, index) => {
+        const dependsOnPrevious = !!prompt.depends_on_previous
+            || String(prompt.dependency_mode || '').toLowerCase() === 'product_reference'
+            || String(prompt.dependency_mode || '').toLowerCase() === 'fusion';
+        const generation = {
+            id: String(prompt.id || '').trim(),
+            title: String(prompt.title || prompt.name || '').trim(),
+            type: agentNormalizeTaskType(prompt.type || prompt.kind || prompt.role || 'other'),
+            role: String(prompt.role || '').trim(),
+            prompt: String(prompt.prompt || '').trim(),
+            count: Math.max(1, Math.min(8, Number(prompt.count) || 1)),
+            ratio: prompt.ratio || prompt.aspect_ratio || '',
+            resolution: prompt.resolution || prompt.size || '',
+            use_last_outputs: !!prompt.use_last_outputs,
+            use_attachments: !!prompt.use_attachments,
+            depends_on_previous: dependsOnPrevious,
+            dependency_mode: dependsOnPrevious
+                ? agentNormalizeDependencyMode(prompt.dependency_mode || prompt.dependencyMode, prompt.prompt)
+                : 'none',
+            results: [],
+            status: 'running',
+            _legacy_prompt_bridge: true
+        };
+        if(Array.isArray(prompt.attachment_indices)) generation.attachment_indices = prompt.attachment_indices.slice();
+        if(Array.isArray(prompt.depends_on_steps)) generation.depends_on_steps = prompt.depends_on_steps.slice();
+        if(Array.isArray(prompt.input_artifact_ids)) generation.input_artifact_ids = prompt.input_artifact_ids.slice();
+        if(prompt.output_artifact_id) generation.output_artifact_id = String(prompt.output_artifact_id);
+        if(!generation.id) generation.id = `legacy_prompt_${index + 1}`;
+        return generation;
+    }).filter(generation => generation.prompt);
+}
+
+function agentShouldBridgeLegacyPrompts({thinkingModeOn=false, stage='', runMode='auto', options=[], generations=[], prompts=[]}={}){
+    return !thinkingModeOn
+        && String(stage || '').toLowerCase() === 'plan'
+        && String(runMode || 'auto').toLowerCase() === 'auto'
+        && Array.isArray(options) && options.length === 0
+        && Array.isArray(generations) && generations.length === 0
+        && Array.isArray(prompts) && prompts.length > 0;
 }
 // 确保消息有 current prompt（如果没有 current/editing，找第一个 pending 标记为 current）
 function ensureCurrentPrompt(msg){
@@ -1223,6 +1240,166 @@ function agentResolveCanvasId(){
     return 'default';
 }
 function agentStorageKey(){ return AGENT_STORAGE_PREFIX + agentResolveCanvasId(); }
+function agentStateApiUrl(canvasId=agentResolveCanvasId()){
+    return `${AGENT_STATE_API}/${encodeURIComponent(String(canvasId || 'default'))}`;
+}
+function agentCloneForPersistence(value){
+    try{ return JSON.parse(JSON.stringify(value)); }catch(_){ return null; }
+}
+function agentBuildPersistedState(){
+    try{ agentEnsureActiveConversation(); }catch(_){ }
+    try{ agentCaptureActiveConversation(); }catch(_){ }
+    const data = {
+        ...agentState,
+        // 标记这是后端完整快照，不能沿用 localStorage 离线摘要的 cache 标记。
+        _storageMode:'full',
+        messages: (agentState.messages || []).slice(-AGENT_MSG_MAX),
+        // skills 仅作当前活动对话镜像；真正隔离数据在 conversations[].skills
+        skills: Array.isArray(agentState.skills) ? agentState.skills : [],
+        conversations: Array.isArray(agentState.conversations)
+            ? agentState.conversations.map(c => agentNormalizeConversation({...c, messages:(c.messages||[]).slice(-AGENT_MSG_MAX)}))
+            : [],
+        _storageCanvasId: agentResolveCanvasId(),
+        _savedAt: Date.now()
+    };
+    return agentCloneForPersistence(data);
+}
+function agentBuildLocalStateCache(data){
+    if(!data || typeof data !== 'object') return null;
+    // localStorage 只作离线/旧版回退，绝不再复制完整 Skill 原文、长策划和全部
+    // 多轮输出；完整且可恢复的状态由插件后端按画布保存。
+    const compactMessage = msg => {
+        if(!msg || typeof msg !== 'object') return msg;
+        const next = {...msg};
+        if(typeof next.text === 'string') next.text = next.text.slice(0, 1800);
+        if(typeof next.understanding === 'string') next.understanding = next.understanding.slice(0, 2400);
+        if(Array.isArray(next.skills)) next.skills = next.skills.map(skill => ({
+            id:skill?.id || '', presetId:skill?.presetId || '', name:String(skill?.name || '').slice(0, 120)
+        }));
+        if(Array.isArray(next.generations)) next.generations = next.generations.slice(-8).map(gen => ({
+            ...gen,
+            prompt:String(gen?.prompt || '').slice(0, 1600),
+            results:Array.isArray(gen?.results) ? gen.results.slice(-8) : []
+        }));
+        return next;
+    };
+    const compactSkill = skill => ({
+        id:skill?.id || '', presetId:skill?.presetId || '', name:String(skill?.name || '').slice(0, 120),
+        description:String(skill?.description || '').slice(0, 300)
+    });
+    const compactAttachment = item => ({
+        url:String(item?.url || ''), name:String(item?.name || '').slice(0, 160), kind:item?.kind || 'image',
+        nodeId:item?.nodeId || '', imageIndex:Number(item?.imageIndex || 0)
+    });
+    const compactWorkflow = workflow => workflow ? {
+        id:workflow.id || '', conversationId:workflow.conversationId || '', messageId:workflow.messageId || '',
+        status:workflow.status || 'completed', error:String(workflow.error || '').slice(0, 600),
+        canvasKind:workflow.canvasKind || '', nodeIds:Array.isArray(workflow.nodeIds) ? workflow.nodeIds.slice(-40) : [],
+        createdAt:workflow.createdAt || 0, updatedAt:workflow.updatedAt || 0
+    } : null;
+    const compactConversation = conv => ({
+        id:conv?.id || '', title:String(conv?.title || '对话').slice(0, 120), ts:conv?.ts || 0, updatedAt:conv?.updatedAt || 0,
+        draft:String(conv?.draft || '').slice(0, 1800), messages:(conv?.messages || []).slice(-6).map(compactMessage),
+        attachments:(conv?.attachments || []).map(compactAttachment), skills:(conv?.skills || []).map(compactSkill),
+        workflow:compactWorkflow(conv?.workflow), memory:conv?.memory || null, pending:null
+    });
+    return {
+        _storageMode:'cache', _storageCanvasId:data._storageCanvasId || agentResolveCanvasId(), _savedAt:data._savedAt || Date.now(),
+        activeConversationId:data.activeConversationId || '', chatProvider:data.chatProvider || '', chatModel:data.chatModel || '',
+        genProvider:data.genProvider || '', genModel:data.genModel || '', genRatio:data.genRatio || 'square',
+        genResolution:data.genResolution || '1k', genCount:1, genQuality:data.genQuality || '', autoContext:data.autoContext !== false,
+        inputHeight:data.inputHeight || 0, inputMode:data.inputMode || 'agent', runMode:data.runMode || 'auto',
+        messages:(data.messages || []).slice(-6).map(compactMessage), skills:(data.skills || []).map(compactSkill),
+        conversations:(data.conversations || []).slice(0, AGENT_HISTORY_MAX).map(compactConversation)
+    };
+}
+function agentPersistStateToBackend(data){
+    if(!data || typeof data !== 'object' || !window.fetch) return;
+    agentStateBackendQueued = data;
+    // 首屏先读取完整后端快照。此时不能把 localStorage 摘要或初始化状态
+    // 抢先 PUT 回去，否则会覆盖此前已经完成的策划、规划和执行记录。
+    if(!agentStateBackendHydrated || agentStateBackendHydrating) return;
+    if(agentStateBackendSyncing) return;
+    agentStateBackendSyncing = true;
+    const flush = async () => {
+        while(agentStateBackendQueued){
+            const next = agentStateBackendQueued;
+            agentStateBackendQueued = null;
+            try{
+                const response = await fetch(agentStateApiUrl(next._storageCanvasId), {
+                    method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({state:next})
+                });
+                if(!response.ok) throw new Error(`HTTP ${response.status}`);
+            }catch(error){
+                // 浏览器离线时本地轻量缓存仍可恢复最近记录；下一次保存会自动重试。
+                try{ console.warn('[canvas-agent] backend state save failed', error); }catch(_){ }
+            }
+        }
+        agentStateBackendSyncing = false;
+    };
+    flush();
+}
+function agentApplyPersistedState(data){
+    if(!data || typeof data !== 'object') return false;
+    const incoming = agentCloneForPersistence(data);
+    if(!incoming) return false;
+    agentState = {...agentDefaultState(), ...incoming, messages:Array.isArray(incoming.messages) ? incoming.messages : []};
+    if(!Array.isArray(agentState.skills)) agentState.skills = [];
+    agentState.skills = agentNormalizeSkillList(agentState.skills);
+    if(!Array.isArray(agentState.conversations)) agentState.conversations = [];
+    if(agentState.messages.length && !agentState.conversations.length){
+        const first = agentState.messages[0];
+        agentState.conversations = [{id:uid('ac'), title:String(first?.text || '对话').slice(0, 30), messages:agentState.messages, ts:Date.now()}];
+    }
+    agentState.conversations = agentState.conversations.map(c => agentNormalizeConversation(c)).filter(Boolean);
+    if(!agentState.activeConversationId && agentState.conversations.length) agentState.activeConversationId = agentState.conversations[0].id;
+    const active = agentState.conversations.find(c => c.id === agentState.activeConversationId);
+    if(active) agentApplyConversation(active);
+    else { try{ agentEnsureActiveConversation(); }catch(_){ } }
+    return true;
+}
+async function agentHydrateStateFromBackend(){
+    if(agentStateBackendHydrated || agentStateBackendHydrating || !window.fetch) return;
+    agentStateBackendHydrating = true;
+    let appliedRemote = false;
+    try{
+        const response = await fetch(agentStateApiUrl(), {cache:'no-store'});
+        if(!response.ok) return;
+        const payload = await response.json();
+        const remote = payload?.state;
+        if(!remote || typeof remote !== 'object') return;
+        const localTs = Number(agentState?._savedAt || 0);
+        const remoteTs = Number(remote._savedAt || 0);
+        // localStorage 现在只是离线摘要，不能用它的保存时间阻止后端完整
+        // 快照回填；否则摘要恰好较新时会把策划/规划/执行结果伪装成“已恢复”。
+        // 仅在本地本身也是完整状态（旧兼容路径）时才保留时间戳防倒灌。
+        const localIsFallbackCache = agentState?._storageMode === 'cache';
+        if(!localIsFallbackCache && remoteTs < localTs) return;
+        if(!agentApplyPersistedState(remote)) return;
+        appliedRemote = true;
+        // 远端画布状态会在首屏模型默认值已经套用后异步回填。若不再次
+        // 套用用户明确“设为默认”的平台+模型，新画布的空状态会把它回退
+        // 为提供商列表中的第一个同名模型（例如默认通道而非特价通道）。
+        // 默认模型的语义就是“下次打开生效”，因此回填后必须以它为准。
+        try{ agentApplyModelDefaults(true); }catch(_){ }
+        try{ agentResetPersistedRuntimeOnStartup(); }catch(_){ }
+        try{ renderAgentModelSelectors(true); }catch(_){ }
+        try{ renderAgentAttachments(); renderAgentMessages(); updateAgentPrimaryAction(); }catch(_){ }
+    }catch(error){
+        try{ console.warn('[canvas-agent] backend state load failed', error); }catch(_){ }
+    }finally{
+        agentStateBackendHydrating = false;
+        agentStateBackendHydrated = true;
+        // 已有完整远端状态时，丢弃 hydration 之前积压的本地摘要，随后把
+        // 远端状态（若清理了瞬时运行态则含清理结果）作为新的权威快照保存。
+        if(appliedRemote){
+            agentStateBackendQueued = null;
+            try{ saveAgentState(true); }catch(_){ }
+        }else if(agentStateBackendQueued){
+            agentPersistStateToBackend(agentStateBackendQueued);
+        }
+    }
+}
 function agentStorageKeyCandidates(){
     const keys = [];
     const primary = agentStorageKey();
@@ -1352,7 +1529,9 @@ function agentApplyModelDefaults(force=true){
     try{
         const chatProviders = (typeof chatApiProviders === 'function') ? chatApiProviders() : [];
         const chatProviderOk = !!(chatProvider && chatProviders.some(p => p.id === chatProvider));
-        if(!chatProviderOk){
+        // 提供商列表尚未异步加载时，不能把用户保存的平台清成空，
+        // 否则稍后只能退回列表第一个同名模型。
+        if(chatProviders.length && !chatProviderOk){
             chatProvider = agentFindChatProviderForModel(chatModel) || '';
         }
         // 平台有效时，即使模型暂不在列表也保留平台+模型（避免同名模型跳到别的平台）
@@ -1361,7 +1540,9 @@ function agentApplyModelDefaults(force=true){
     try{
         const genProviders = agentGenProviders();
         const genProviderOk = !!(genProvider && genProviders.some(p => p.id === genProvider));
-        if(!genProviderOk){
+        // 生图提供商通常比理解模型晚到；保留已保存的特价/指定通道，
+        // 待列表就绪后再校验，而非过早回退到默认通道。
+        if(genProviders.length && !genProviderOk){
             genProvider = agentFindGenProviderForModel(genModel) || '';
         }
     }catch(_){ }
@@ -1489,6 +1670,9 @@ function loadAgentState(){
     // 加载当前对话的 messages
     // 规范化所有对话，保证结构完整（记忆/Skill/附件隔离字段）
     agentState.conversations = (agentState.conversations || []).map(c => agentNormalizeConversation(c));
+    // 运行态只在当前页面内有效；重启后不可把旧任务恢复成“正在执行”。
+    // 对话正文、策划、结果和失败信息仍完整保留，用户可从节点或失败项手动重试。
+    const startupRuntimeReset = agentResetPersistedRuntimeOnStartup();
     const activeConv = agentState.conversations.find(c => c.id === agentState.activeConversationId);
     if(activeConv){
         // 旧数据：若对话尚无 skills 字段，把全局 skills 迁移进当前活动对话一次
@@ -1537,7 +1721,9 @@ function loadAgentState(){
         }
     });
     // 恢复中断的操作
-    _setupAgentRecovery();
+    // 旧版会在这里自动恢复持久化 taskId，导致重启后面板初始处于停止态。
+    // 本版本启动时已清理瞬时运行态，因此不再自动触发恢复。
+    if(startupRuntimeReset) saveAgentState(true);
 }
 // 恢复中断的 Agent 操作（页面刷新后调用）
 let _agentRecoveryInProgress = false;
@@ -1661,16 +1847,17 @@ function _setupAgentRecovery(){
         }
     }
     // 情况3：只有 pendingMessage 但没有 LLM task（LLM 还没创建就断了）→ 提示重新发送
-    if(pendingText && agentState.messages.length){
-        const lastMsg = agentState.messages[agentState.messages.length - 1];
+    if(pendingText && msgs.length){
+        const lastMsg = msgs[msgs.length - 1];
         if(lastMsg && lastMsg.role === 'user'){
-            agentState.messages.push({
+            agentPushMessageToConversation(recCid, {
                 id: uid('am'),
                 role: 'assistant',
                 text: '⚠️ ' + (tr('smart.agentInterrupted') || '上次操作被中断，请重新发送'),
                 options: [{label: tr('smart.agentRetry') || '重新发送', value: pendingText}],
                 generations: [],
-                ts: Date.now()
+                ts: Date.now(),
+                conversationId: recCid
             });
         }
     }
@@ -1686,21 +1873,28 @@ function saveAgentState(immediate=false){
     clearTimeout(agentSaveTimer);
     const flush = () => {
         try {
-            // 完整快照当前对话（消息/附件/Skill/工作流/记忆/pending），保证对话隔离可持久化
-            try{ agentEnsureActiveConversation(); }catch(_){}
-            try{ agentCaptureActiveConversation(); }catch(_){}
-            const data = {
-                ...agentState,
-                messages: (agentState.messages || []).slice(-AGENT_MSG_MAX),
-                // skills 仅作当前活动对话镜像；真正隔离数据在 conversations[].skills
-                skills: Array.isArray(agentState.skills) ? agentState.skills : [],
-                conversations: Array.isArray(agentState.conversations)
-                    ? agentState.conversations.map(c => agentNormalizeConversation({...c, messages:(c.messages||[]).slice(-AGENT_MSG_MAX)}))
-                    : [],
-                _storageCanvasId: agentResolveCanvasId(),
-                _savedAt: Date.now()
-            };
-            localStorage.setItem(agentStorageKey(), JSON.stringify(data));
+            const data = agentBuildPersistedState();
+            if(!data) return;
+            agentPersistStateToBackend(data);
+            // localStorage 只保留离线回退摘要；完整对话写入插件后端，避免容量溢出。
+            if(!agentLocalStateCacheDisabled) try{
+                const cache = agentBuildLocalStateCache(data);
+                if(cache) localStorage.setItem(agentStorageKey(), JSON.stringify(cache));
+            }catch(cacheError){
+                // 完整历史由后端快照保存。旧版本遗留在同一 key 的完整状态可能
+                // 已经占满配额；仅移除本插件当前画布的离线回退缓存，再写入裁剪
+                // 后的摘要，不触碰画布、节点、图片或其他插件的数据。
+                try{
+                    const key = agentStorageKey();
+                    localStorage.removeItem(key);
+                    const cache = agentBuildLocalStateCache(data);
+                    if(cache) localStorage.setItem(key, JSON.stringify(cache));
+                }catch(retryError){
+                    // localStorage 可能已被宿主或其他旧缓存占满。完整状态已在本插件
+                    // 后端落盘，因此本页静默禁用离线摘要，避免每次阶段更新都刷警告。
+                    agentLocalStateCacheDisabled = true;
+                }
+            }
         } catch(e) {
             try{ console.warn('[canvas-agent] saveAgentState failed', e); }catch(_){}
         }
@@ -2299,18 +2493,27 @@ function agentResolveStepGenerationSettings(userText='', generation={}, fallback
     const userRatio = chatRequestedRatioForGeneration(userText, generation);
     const userResolution = chatRequestedResolution(userText);
     const userQuality = chatRequestedQuality(userText);
-    const requestedRatio = userRatio || agentNormalizeRatioValue(generation?.ratio) || agentNormalizeRatioValue(fallback?.ratio) || 'square';
+    // A task freezes the Agent toolbar settings when the user sends it. If
+    // the user did not state a parameter in text, that snapshot is authoritative.
+    const preferTaskSettings = fallback?.prefer_task_settings === true;
+    const fallbackRatio = agentNormalizeRatioValue(fallback?.ratio);
+    const generationRatio = agentNormalizeRatioValue(generation?.ratio);
+    const fallbackResolution = agentNormalizeResolutionValue(fallback?.resolution);
+    const generationResolution = agentNormalizeResolutionValue(generation?.resolution);
+    const fallbackQuality = agentNormalizeQualityValue(fallback?.quality);
+    const generationQuality = agentNormalizeQualityValue(generation?.quality);
+    const requestedRatio = userRatio || (preferTaskSettings ? fallbackRatio : generationRatio) || (preferTaskSettings ? generationRatio : fallbackRatio) || 'square';
     const constrainedRatio = agentConstrainRatio(requestedRatio);
     return {
         ratio: constrainedRatio.ratio,
-        resolution: userResolution || agentNormalizeResolutionValue(generation?.resolution) || agentNormalizeResolutionValue(fallback?.resolution) || '1k',
-        quality: userQuality || agentNormalizeQualityValue(generation?.quality) || agentNormalizeQualityValue(fallback?.quality) || 'auto',
+        resolution: userResolution || (preferTaskSettings ? fallbackResolution : generationResolution) || (preferTaskSettings ? generationResolution : fallbackResolution) || '1k',
+        quality: userQuality || (preferTaskSettings ? fallbackQuality : generationQuality) || (preferTaskSettings ? generationQuality : fallbackQuality) || 'auto',
         sources: {
-            ratio: constrainedRatio.adjusted ? 'adjusted' : (userRatio ? 'user' : (agentNormalizeRatioValue(generation?.ratio) ? 'generation' : 'fallback')),
+            ratio: constrainedRatio.adjusted ? 'adjusted' : (userRatio ? 'user' : (preferTaskSettings && fallbackRatio ? 'task_settings' : (generationRatio ? 'generation' : 'fallback'))),
             requestedRatio,
             adjustedFrom: constrainedRatio.adjusted,
-            resolution: userResolution ? 'user' : (agentNormalizeResolutionValue(generation?.resolution) ? 'generation' : 'fallback'),
-            quality: userQuality ? 'user' : (agentNormalizeQualityValue(generation?.quality) ? 'generation' : 'fallback')
+            resolution: userResolution ? 'user' : (preferTaskSettings && fallbackResolution ? 'task_settings' : (generationResolution ? 'generation' : 'fallback')),
+            quality: userQuality ? 'user' : (preferTaskSettings && fallbackQuality ? 'task_settings' : (generationQuality ? 'generation' : 'fallback'))
         }
     };
 }
@@ -2966,6 +3169,51 @@ function agentLooksLikeEditLastResult(userText=''){
     if(/(变成|转为)/.test(t) && !/(生成|画一|做一|制作|出一|表情包|主图|详情|套图|系列|分镜)/.test(t)) return true;
     return false;
 }
+// 图片分析/提示词反推是独立意图：只分析本轮明确提供的图片，不进入生图规划。
+function agentLooksLikeImageAnalysisRequest(userText=''){
+    const t = String(userText || '').trim().toLowerCase();
+    if(!t) return false;
+    return /(?:\u53cd\u63a8|\u63d0\u53d6|\u5206\u6790|\u89e3\u6790|\u603b\u7ed3)[^\n]{0,24}(?:\u56fe\u7247|\u56fe|\u63d0\u793a\u8bcd|\u6784\u56fe|\u8272\u8c03|\u98ce\u683c)|(?:reverse|extract|analy[sz]e|describe)[^\n]{0,40}(?:prompt|image|composition|color|style)/i.test(t);
+}
+async function agentRunImageAnalysisStage({conversationId='', userMsg=null, text='', attachments=[]}={}){
+    const ownerConversationId = String(conversationId || userMsg?.conversationId || agentState?.activeConversationId || '').trim();
+    const imageUrls = (attachments || []).map(item => item?.url).filter(Boolean).slice(0, AGENT_LLM_IMAGE_MAX);
+    if(!imageUrls.length) return false;
+    const requestedSettings = userMsg?.requestedSettings || {};
+    const provider = resolveChatProviderId(requestedSettings.chatProvider || agentState.chatProvider);
+    const model = resolveChatModel(requestedSettings.chatModel || agentState.chatModel, provider);
+    agentPatchConversationWorkflow(ownerConversationId, workflow => { workflow.status = 'analyzing'; workflow.updatedAt = Date.now(); });
+    const systemPrompt = [
+        '你是图片分析与提示词反推助手，不是生图规划器。',
+        '只分析用户本轮明确提供的图片，不读取历史消息、画布节点或历史生成结果。',
+        '用户要求反推提示词时，请输出：主体与细节、构图与镜头、光线、色调、材质、风格，以及一条纯净可直接使用的提示词。',
+        '不要生成图片，不要规划张数，不要输出 generations、plan、attachment_indices，不要虚构第二张或更多参考图。',
+        '使用中文自然语言回答。'
+    ].join('\\n');
+    const result = await agentCreateAndWaitLlmTask({
+        message: String(text || userMsg?.text || '').trim(),
+        messages: [],
+        images: imageUrls,
+        videos: [],
+        model,
+        provider,
+        ms_model: provider === 'modelscope' ? model : '',
+        system_prompt: systemPrompt
+    }, {stream:true, conversationId:ownerConversationId, requestId:userMsg?._pendingRequestId || ''});
+    const answer = String(result?.text || result?.content || '').trim();
+    if(!answer) throw new Error('图片分析未返回内容');
+    const assistantMsg = {
+        id:uid('am'), role:'assistant', text:answer, analysis:answer, stage:'analyze_image',
+        generations:[], prompts:[], options:[], contextSources:{conversationId:ownerConversationId, historyCount:0, canvasSnapshotId:'', imageCount:imageUrls.length},
+        inputRefs:(attachments || []).filter(item => item?.url).map(item => ({url:item.url, name:item.name || 'image', kind:item.kind || 'image'})),
+        ts:Date.now(), conversationId:ownerConversationId
+    };
+    agentPushMessageToConversation(ownerConversationId, assistantMsg);
+    agentPatchConversationWorkflow(ownerConversationId, workflow => { workflow.status = 'completed'; workflow.error = ''; workflow.updatedAt = Date.now(); });
+    if(agentIsActiveConversation(ownerConversationId)){ agentSending=false; agentThinking=false; agentThinkingStage=''; renderAgentMessages(); }
+    saveAgentState(true);
+    return true;
+}
 function agentHasActiveSkills(skills){
     // 显式传入数组时（含空数组）以参数为准，避免空 skill 被 agentState 旧值污染
     if(Array.isArray(skills)) return skills.length > 0;
@@ -2976,8 +3224,7 @@ function agentHasActiveSkills(skills){
     }
 }
 function agentLooksLikeExplicitFusion(userText=''){
-    const t = String(userText || '');
-    return /组合|结合|合成|融合|拼在一起|合并|合在一起|放在一起|拼合|合成一|合成一张|合成一图/.test(t);
+    return agentHasPositiveFusionIntent(userText);
 }
 function agentLooksLikeExplicitSeriesOrFusion(userText=''){
     const t = String(userText || '');
@@ -4108,6 +4355,43 @@ function agentGenCardHtml(gen, numOffset, messageId='', genIndex=-1){
     const spinner = (status === 'running' || status === 'waiting') ? '<span class="agent-gen-spinner"></span>' : '';
     return `<div class="agent-gen-card"><div class="agent-gen-status ${statusClass}">${spinner}<span>${escapeHtml(statusText)}${fullRefTags ? ' · ' + escapeHtml(fullRefTags) : ''}${gen.refCount ? ` · 引用${gen.refCount}张` : ''}</span></div>${status === 'error' && gen.error ? `<div class="agent-gen-error">${escapeHtml(String(gen.error).slice(0, 200))}${gen.retryCount ? ` · 已重试${gen.retryCount}次` : ''}</div>` : ''}${thumbs ? `<div class="agent-msg-thumbs">${thumbs}</div>` : ''}${retryFailed}</div>`;
 }
+
+// Keep conversational/inspection requests out of the generation planner.  This
+// classifier is deliberately conservative: only explicit generation verbs enter
+// the planning pipeline; ordinary questions remain a normal chat turn.
+function agentClassifyIntent({text='', attachments=[], skills=[]}={}){
+    const t = String(text || '').trim();
+    const hasImages = Array.isArray(attachments) && attachments.some(a => a && a.url);
+    const hasSkills = agentHasActiveSkills(skills);
+    if (hasImages && agentLooksLikeImageAnalysisRequest(t)) {
+        return {intent:'analyze_image', confidence:0.98, reasons:['explicit image analysis/reverse-prompt request']};
+    }
+    const edit = /(?:\u4fee\u6539|\u6539\u6210|\u66ff\u6362|\u8c03\u6574|\u91cd\u65b0\u751f\u6210|\u91cd\u505a|\u4fee\u56fe|\u6539\u56fe|\u628a.*(?:\u53d8\u6210|\u6539\u4e3a))/.test(t)
+        || /\b(?:edit|modify|replace|retouch|recreate)\b/i.test(t);
+    const generate = /(?:\u751f\u6210|\u5236\u4f5c|\u753b\u4e00|\u753b\u51fa|\u521b\u4f5c|\u51fa\u56fe|\u505a\u4e00\u5f20|\u505a\u4e00\u5957|\u8bbe\u8ba1\u4e00)/.test(t)
+        || /\b(?:generate|create|draw|make|design)\b/i.test(t);
+    const complex = agentLooksLikeExplicitSeriesOrFusion(t) || /(?:\u5206\u955c|\u6545\u4e8b|\u8be6\u60c5\u9875|\u4e3b\u56fe|\u5957\u56fe)/.test(t);
+    if (edit && hasImages) return {intent:'edit_image', confidence:0.95, reasons:['explicit edit verb with current-turn image']};
+    if (generate || hasSkills) return {intent:complex ? 'plan_design' : 'generate_image', confidence:0.9, reasons:[generate?'explicit generation verb':'active skill task']};
+    if (/(?:\u753b\u5e03|\u8282\u70b9|\u5f53\u524d\u56fe|\u5de6\u8fb9\u90a3\u5f20|\u770b\u4e00\u4e0b)/.test(t)) return {intent:'inspect_canvas', confidence:0.75, reasons:['canvas inspection wording']};
+    return {intent:'chat', confidence:0.8, reasons:['no explicit generation/edit instruction']};
+}
+
+async function agentRunChatStage({conversationId='', userMsg=null, text='', attachments=[], history=[], canvasSnapshot=null, intent='chat'}={}){
+    const cid = conversationId || agentState.activeConversationId || '';
+    const provider = agentState.chatProvider || agentState.genProvider || '';
+    const model = agentState.chatModel || agentState.genModel || '';
+    const snapshot = intent === 'inspect_canvas' ? agentSanitizeCanvasSnapshot(canvasSnapshot) : null;
+    const snapshotBlock = snapshot ? `\n当前用户明确要求查看的画布快照（仅用于回答，绝不能当作参考图或附件）：\n${JSON.stringify(snapshot)}` : '';
+    const prompt = `你是画布助手。只回答用户当前问题，不规划生图、不创建节点、不输出 generations。若用户没有明确提出生图或改图，请保持对话即可。${snapshotBlock}`;
+    const result = await agentCreateAndWaitLlmTask({message:String(text||'').trim(), messages:Array.isArray(history)?history:[], images:attachments.filter(a=>a?.url).map(a=>a.url), videos:[], model, provider, ms_model:provider==='modelscope'?model:'', system_prompt:prompt}, {stream:true, conversationId:cid, requestId:userMsg?._pendingRequestId||''});
+    const answer = String(result?.text || result?.content || '').trim() || '我已收到。请告诉我你希望对画布或图片做什么。';
+    agentPushMessageToConversation(cid, {id:uid('am'), role:'assistant', text:answer, stage:intent === 'inspect_canvas' ? 'inspect_canvas' : 'chat', generations:[], prompts:[], contextSources:{conversationId:cid, historyCount:Array.isArray(history)?history.length:0, canvasSnapshotId:snapshot?.snapshotId||'', canvasNodeCount:Array.isArray(snapshot?.nodes)?snapshot.nodes.length:0}, ts:Date.now(), conversationId:cid});
+    agentPatchConversationWorkflow(cid, workflow=>{workflow.status='completed'; workflow.error=''; workflow.updatedAt=Date.now();});
+    if(agentIsActiveConversation(cid)){ agentSending=false; agentThinking=false; agentThinkingStage=''; renderAgentMessages(); }
+    saveAgentState(true);
+    return true;
+}
 function agentExecutionPromptsHtml(generations=[]){
     const prompts = generations.map((gen, index) => ({
         title: String(gen?.title || gen?.role || `步骤 ${index + 1}`).trim(),
@@ -4744,7 +5028,7 @@ function agentNormalizeConversation(conv){
         return msg;
     });
     conv.memory = agentSanitizeConversationMemory(conv.memory);
-    if(typeof conv.draft !== 'string') conv.draft = conv.draft ? String(conv.draft) : '';
+    conv.draft = agentSanitizeComposerDraft(conv.draft);
     if(conv.workflow === undefined) conv.workflow = null;
     if(conv.pending === undefined) conv.pending = null;
     return conv;
@@ -4847,7 +5131,11 @@ function agentCaptureActiveConversation(){
     }
     agentNormalizeConversation(conv);
     conv.messages = (agentState.messages || []).slice(-AGENT_MSG_MAX);
-    try{ conv.draft = String((typeof agentGetInputValue==="function"?agentGetInputValue():'') || agentInput?.textContent || ''); }catch(_){ conv.draft = conv.draft || ''; }
+    try{
+        // agentGetInputValue 已经会跳过图片字符；空字符串是合法结果，不能再回退到
+        // textContent，否则会把芯片的“参考图1×”误存为下一次待发送草稿。
+        conv.draft = agentSanitizeComposerDraft(typeof agentGetInputValue === 'function' ? agentGetInputValue() : '');
+    }catch(_){ conv.draft = agentSanitizeComposerDraft(conv.draft); }
     conv.attachments = (agentState.attachments || []).slice();
     conv.skills = (Array.isArray(agentState.skills) ? agentState.skills : []).map(s => ({...s}));
     conv.workflow = agentActiveWorkflow || null;
@@ -4889,10 +5177,92 @@ function agentApplyConversation(conv){
     updateAgentPrimaryAction();
 }
 
+// 画布/插件重启后，持久化的运行态不能继续充当“当前正在执行”的事实。
+// 后端的内存任务表会随服务重启清空；如果原样恢复 workflow/generations，
+// 面板会一打开就显示“停止/执行中”，并尝试轮询已经不存在的旧 taskId。
+// 保留对话、策划和已完成结果，只清理真正的瞬时运行字段，等待用户手动重试。
+function agentResetPersistedRuntimeOnStartup(){
+    if(!agentState) return false;
+    const activeStatuses = new Set(['planning','analyzing','creating_nodes','ready','running','stopping']);
+    let changed = false;
+    const conversations = Array.isArray(agentState.conversations) ? agentState.conversations : [];
+    conversations.forEach(conv => {
+        if(!conv || typeof conv !== 'object') return;
+        const workflow = conv.workflow;
+        if(workflow && activeStatuses.has(String(workflow.status || '').toLowerCase())){
+            conv.workflow = {
+                ...workflow,
+                status:'interrupted',
+                error:'画布重启后未自动恢复上次任务，请按需手动重试',
+                activeTaskIds:[],
+                updatedAt:Date.now()
+            };
+            changed = true;
+        }
+        const messages = Array.isArray(conv.messages) ? conv.messages : [];
+        messages.forEach(msg => {
+            if(!msg || msg.role !== 'assistant' || !Array.isArray(msg.generations)) return;
+            msg.generations.forEach(gen => {
+                if(!gen || !activeStatuses.has(String(gen.status || '').toLowerCase())) return;
+                gen.status = 'stopped';
+                gen.error = '画布重启后任务已中断，可在节点中手动重试';
+                gen.taskIds = [];
+                gen.pending = 0;
+                changed = true;
+                // 占位节点属于本轮瞬时 UI 状态，不能在重启后继续显示读秒。
+                const placeholderId = String(gen.placeholderNodeId || '');
+                if(placeholderId && typeof nodes !== 'undefined' && Array.isArray(nodes)){
+                    const node = nodes.find(item => item?.id === placeholderId);
+                    if(node){
+                        node.pending = 0;
+                        node.running = false;
+                        node.runTimerHidden = false;
+                        delete node.pendingTasks;
+                    }
+                }
+            });
+        });
+        // pending LLM/image 任务只用于跨刷新恢复；服务重启后必须释放。
+        // 旧版本可能只留下 _pendingRequestId（没有 message/taskId），也必须
+        // 清掉，否则 agentPendingStore() 会在保存时把它重新合并回运行态。
+        if(conv.pending && typeof conv.pending === 'object'){
+            conv.pending = null;
+            changed = true;
+        }
+    });
+    const pendingStore = agentState._pendingByConversation;
+    if(pendingStore && typeof pendingStore === 'object'){
+        if(Object.keys(pendingStore).length){
+            agentState._pendingByConversation = {};
+            changed = true;
+        }
+    }
+    ['_pendingRequestId','_pendingMessage','_pendingAttachments','_pendingUserMsg','_pendingLlmTaskId','_pendingLlmTaskTs','_pendingConversationId']
+        .forEach(key => { if(agentState[key] !== undefined){ delete agentState[key]; changed = true; } });
+    if(changed){
+        const active = conversations.find(conv => conv?.id === agentState.activeConversationId);
+        agentActiveWorkflow = active?.workflow || null;
+        agentSending = false;
+        agentThinking = false;
+        agentThinkingStage = '';
+        agentThinkingConversationId = '';
+        agentGlobalTaskOwnerConversationId = '';
+    }
+    return changed;
+}
+
 function agentNewChat(){
     if(!agentState) return;
     // 保存并隔离当前对话（消息/附件/Skill/工作流/记忆/待恢复任务）
     agentCaptureActiveConversation();
+    // 选图发送快照属于"当前对话 + 当前一次画布选图"的瞬态状态，不能随新对话
+    // 继承。否则上一轮任务结束后宿主仍选中的输出节点，会在新对话点击发送时被
+    // sendAgentMessage 的兜底逻辑重新注入，造成用户没有选择参考图却带上旧图。
+    agentSendSelectionSnapshot = [];
+    agentSelectionGestureUntil = 0;
+    agentLastSelectionSig = '';
+    agentGhostConfirmedSig = '';
+    clearAgentGhostAttachment();
     const newConv = agentNormalizeConversation({
         id: uid('ac'),
         title: '新对话',
@@ -5506,14 +5876,52 @@ async function agentRetryMessage(msgId){
         return;
     }
     try{
-    // 只截掉旧的助手回复及其后续消息，保留原始 user 消息对象和 id；绝不重建输入框，也不调用 sendAgentMessage。
-    conversationMessages.splice(targetIndex);
-    if(conversationId === agentState.activeConversationId) agentState.messages = conversationMessages;
-    const attachments = Array.isArray(userMsg.images) ? userMsg.images.filter(x => x?.url).map((att, i) => ({
+    // 旧任务可能在首次发送时没有把画布选中图写入 userMsg.images。
+    // 重试时仅在用户明确提到参考/原图且当前确实选中了图片节点的情况下恢复，
+    // 不把普通文本任务静默绑定到任意旧选区。
+    let attachments = Array.isArray(userMsg.images) ? userMsg.images.filter(x => x?.url).map((att, i) => ({
         ...att,
         refIndex: i + 1,
         label: att.label || ('参考图' + (i + 1))
     })) : [];
+    const retryText = String(userMsg.text || '').trim();
+    const planMentionsRefs = Array.isArray(target.generations) && target.generations.some(gen =>
+        gen?.use_attachments === true || (Array.isArray(gen?.attachment_indices) && gen.attachment_indices.length)
+    );
+    const retryNeedsRefs = planMentionsRefs || /原图|参考图|参考|这张图|这几张图|选中.*图|重新.*(?:图|生成)/.test(retryText);
+    if(!attachments.length && typeof selectedAgentImageNodes === 'function' && typeof agentBuildAttachmentsFromNodes === 'function'){
+        try{
+            const selectedNodes = selectedAgentImageNodes();
+            if(Array.isArray(selectedNodes) && selectedNodes.length){
+                attachments = agentBuildAttachmentsFromNodes(selectedNodes).map((att, i) => ({
+                    ...att,
+                    refIndex: i + 1,
+                    label: '参考图' + (i + 1)
+                }));
+            }
+        }catch(_){ }
+    }
+    if(!attachments.length && retryNeedsRefs){
+        if(typeof toast === 'function') toast('这条任务需要参考图，请先选中原图和目标参考图后再重试');
+        return;
+    }
+    // 只截掉旧的助手回复及其后续消息，保留原始 user 消息对象和 id；绝不重建输入框，也不调用 sendAgentMessage。
+    conversationMessages.splice(targetIndex);
+    if(conversationId === agentState.activeConversationId) agentState.messages = conversationMessages;
+    if(attachments.length && (!Array.isArray(userMsg.images) || !userMsg.images.filter(x => x?.url).length)){
+        // 将恢复的节点写回原用户消息，保证规划、执行、消息回显使用同一份附件快照。
+        userMsg.images = attachments.slice();
+        try{
+            const baseParts = Array.isArray(userMsg.parts) ? userMsg.parts.filter(part => part?.type !== 'image') : [];
+            const recoveredParts = baseParts.concat(attachments.map(att => ({...att, type:'image'})));
+            userMsg.parts = typeof agentNormalizeComposerParts === 'function'
+                ? agentNormalizeComposerParts(recoveredParts, userMsg.text || '', attachments)
+                : recoveredParts;
+            if(typeof agentAttachmentManifestText === 'function'){
+                userMsg.attachmentManifest = agentAttachmentManifestText(attachments, userMsg.text || '', userMsg.skills || []);
+            }
+        }catch(_){ }
+    }
     agentStopRequested = false;
     agentSending = true;
     agentThinking = true;
@@ -5706,8 +6114,8 @@ function agentSystemPrompt(bypassThinking, finalCount, mode='plan', taskContext=
     if(promptMode === 'understand'){
         parts.push(AGENT_UNDERSTAND_INSTRUCTION);
         if(hasSkills){
-            parts.push(`【Skill 优先级（强制）】采用 Skill 声明的专业身份和输出结构。先输出“当前采用的 Skill 角色与不可变约束”，再严格按 Skill 原有格式逐项展开。通用 Agent 身份、通用四段模板或摘要格式均不得覆盖 Skill。用户参数只覆盖数量、比例、画质、模型和语言等明确参数。除文末 AGENT_TASK_SPEC 外，不要输出其他 JSON 或 generations。`);
-            parts.push(`【提交前逐字检查】如果 Skill 原文包含“视觉整体定位”“统一风格提示词”“统一负面提示词”，则正文必须逐字保留这三个标题并各自填写完整非空内容，不得改名、合并或只在逐页内容中暗示；同时把三项原文分别写入 AGENT_TASK_SPEC.global_contract.visual_positioning、unified_style_prompt、unified_negative_prompt。缺少任意一项都视为策划未完成。`);
+            parts.push(`【Skill 优先级（强制）】采用 Skill 声明的专业身份、规则和输出结构。先输出对本轮任务有用的策划内容，再严格按 Skill 原有格式展开；不要套用电商页面字段，也不要因为标题改名而丢弃合法策划。用户参数只覆盖数量、比例、画质、模型和语言等明确参数。除文末 AGENT_TASK_SPEC 外，不要输出其他 JSON 或 generations。`);
+            parts.push(`【提交前检查】将 Skill 明确要求的全局约束和逐项字段保留在正文或 AGENT_TASK_SPEC 中；如果 Skill 没有明确声明某个字段，就不要自行新增该字段。required_fields 只填写 Skill 明确要求且执行层确实需要的字段。`);
         }else{
             parts.push(`【无 Skill 通用结构】按“需求理解、参考图理解、推荐流程、逐项提示词方案”组织策划；每个成果写清目标、保持项、变化项、画面、参考图用法和参数。`);
         }
@@ -5906,6 +6314,28 @@ function agentFreshTaskHistoryMessages(conversationId='', options={}){
     // “新任务”只表示不自动复用旧图片/附件；文字上下文仍属于当前对话，
     // 并且必须按任务所属 conversationId 读取，不能读取当前活动对话。
     return agentHistoryMessages(conversationId, options);
+}
+// 对话会保留记忆，但每句明确的“生成/制作”默认都是一个新的画布任务。
+// 只有用户明确指向已完成内容时，才把同一对话的历史、记忆和画布快照
+// 注入 LLM；否则模型容易把“上一张水杯”和“这次咖啡杯”合成一套任务。
+// 本轮上传/选中的参考图始终由 attachments 传入，不依赖历史上下文。
+function agentIsExplicitTaskContinuation(userText=''){
+    const text = String(userText || '').trim();
+    if(!text) return false;
+    // 否定句不能被误判成“继续上一轮”：例如“不要引用任何上一轮图片”
+    // 是新任务的隔离约束，不是续作指令。仅移除被否定词包住的片段，
+    // 保留同一句中真正的“继续修改当前图”等正向续作要求。
+    const positive = /(?:继续|接着|上一(?:张|轮|个|步)|上图|上一次|刚才(?:那|的)?|刚刚(?:那|的)?|前面(?:那|的)?|之前(?:那|的)?|在此基础上|基于(?:上|前|刚)|沿用(?:上|前|刚)|修改(?:上一张|上图|刚才|前面)|重试(?:上一|上图|刚才)?)/;
+    const withoutNegatedRefs = text.replace(/(?:不要|无需|禁止|不能|不可|不应|不需要|切勿|勿|严禁)[^。；;\n]{0,24}(?:上一(?:张|轮|个|步)|上图|上一次|刚才(?:那|的)?|刚刚(?:那|的)?|前面(?:那|的)?|之前(?:那|的)?)/g, '');
+    return positive.test(withoutNegatedRefs);
+}
+
+function agentLooksLikeIndependentGenerationRequest(userText=''){
+    const text = String(userText || '').trim();
+    if(!text) return false;
+    // 仅识别用户对本轮步骤关系的明确表述，不根据 prompt 内容猜依赖。
+    return /(?:独立|分别|各自|并行|单独)[^。；;\n]{0,24}(?:生成|制作|设计|创建|画|出图)/.test(text)
+        || /(?:生成|制作|设计|创建|画|出图)[^。；;\n]{0,24}(?:独立|分别|各自|并行|单独)/.test(text);
 }
 function agentActiveConversationMemory(conversationId=''){
     const cid = conversationId || agentState?.activeConversationId || '';
@@ -6408,7 +6838,17 @@ function parseAgentResponse(raw, lastUserText){
             const collected = (data.collected && typeof data.collected === 'object') ? data.collected : {};
             const nextDimension = typeof data.next_dimension === 'string' ? data.next_dimension : '';
             const remainingDimensions = Array.isArray(data.remaining_dimensions) ? data.remaining_dimensions : [];
-            parsedCandidates.push({reply, options, prompts, generations, shared_style: sharedStyle, plan: (data.plan && typeof data.plan === "object") ? data.plan : null, collected, next_dimension, remainingDimensions});
+            parsedCandidates.push({
+                reply,
+                options,
+                prompts,
+                generations,
+                shared_style: sharedStyle,
+                plan: (data.plan && typeof data.plan === "object") ? data.plan : null,
+                collected,
+                next_dimension: nextDimension,
+                remaining_dimensions: remainingDimensions
+            });
         } catch(e) { /* 尝试下一个候选 */ }
     }
     // 如果有多个解析成功的候选，按优先级选择：
@@ -6600,9 +7040,11 @@ function agentApplyTaskSpecToPlan(parsed, taskSpec){
 function agentBindSkillPlanPagesToGenerations(parsed, confirmedPlanText='', taskSpec=null, skills=[]){
     const gens = Array.isArray(parsed?.generations) ? parsed.generations : [];
     const planText = String(confirmedPlanText || '').trim();
-    const skillText = agentNormalizeSkillList(skills).map(skill => String(skill?.content || '')).join('\n');
-    const hasPageContract = /页面作用/.test(skillText) && /AI\s*图片生成提示词/.test(skillText) && /文案排版说明/.test(skillText);
-    if(!hasPageContract || !planText || !gens.length) return {bound:0, blocks:[]};
+    const hasSkill = agentNormalizeSkillList(skills).length > 0;
+    // 不以 Skill 名称或固定字段决定是否绑定。先按阶段1正文识别实际的逐项
+    // 策划块；只有识别到页面/步骤块时才做原文绑定。这样自定义 Skill 的
+    // 标题、单图任务和非电商任务不会被强行套用详情页模板。
+    if(!hasSkill || !planText || !gens.length) return {bound:0, blocks:[]};
 
     const lines = planText.split(/\r?\n/);
     const blocks = [];
@@ -6638,6 +7080,7 @@ function agentBindSkillPlanPagesToGenerations(parsed, confirmedPlanText='', task
         if(current) current.lines.push(line);
     });
     flush();
+    if(!blocks.length) return {bound:0, blocks:[]};
 
     const normalizedTaskSpec = agentNormalizeTaskSpec(taskSpec);
     const contract = normalizedTaskSpec?.global_contract || null;
@@ -7543,7 +7986,11 @@ async function agentRunUnderstandingStage({conversationId='', userMsg=null, text
             skills: userMsg?.skills || [],
             taskSpec
         });
-        if(!taskSpec) understandingErrors.push(`阶段1任务单无效：${understandingEnvelope.taskSpecError || '缺少 deliverables'}`);
+        // AGENT_TASK_SPEC 是阶段间的加速结构，不是理解正文的硬门槛。
+        // 某些兼容模型会返回完整策划但省略标记；只要正文包含可执行
+        // 目标，就让阶段2依据策划继续生成 plan，不能把格式缺失误判成需求无效。
+        // 真正缺少任务/成果的正文仍由 agentValidateUnderstandingStage 拦截。
+        const taskSpecMissing = !taskSpec;
         const assistantMsg = {
             id: uid('am'),
             role: 'assistant',
@@ -7555,6 +8002,7 @@ async function agentRunUnderstandingStage({conversationId='', userMsg=null, text
             generations: [],
             plan: null,
             taskSpec,
+            taskSpecMissing,
             shared_style: '',
             contextSources: userMsg?.contextSources || null,
             ts: Date.now(),
@@ -7672,6 +8120,9 @@ async function agentRunUnderstandingStage({conversationId='', userMsg=null, text
             updateAgentPrimaryAction();
         }
         saveAgentState(true);
+        // 该错误已经作为本阶段的可见消息写入。继续向外抛出只是为了
+        // 让发送流程释放状态，外层不应再追加第二条相同错误。
+        try{ error.__canvasAgentReported = true; }catch(_){ }
         throw error;
     }
 }
@@ -7700,6 +8151,9 @@ async function agentRunPlanningFromUnderstanding({conversationId='', userMsg=nul
         }
         planMessage += `${AGENT_NL}${AGENT_NL}请基于以上策划与用户原要求，输出 plan + generations JSON。`;
         planMessage += `${AGENT_NL}${AGENT_NL}【阶段2硬性要求】generations 必须按最终张数逐条输出；每条 prompt 必须是完整可直接生图的中文视觉描述（含保持不变元素 + 本张变化 + 构图光线画质），禁止只写服装名/表情名/短标签。换装任务每条都要锁定同一人物身份与姿势，只替换服装。`;
+    }
+    if(agentLooksLikeIndependentGenerationRequest(messageText) && !agentIsExplicitTaskContinuation(messageText)){
+        planMessage += `${AGENT_NL}${AGENT_NL}【本轮独立步骤约束】用户明确要求独立/分别/并行生成：每个独立 generation.prompt 只能描述本步目标和本轮明确提供的参考图；不得提及“之前/前一步/上一步/此前生成/previously generated/上游输出”等内容，也不得把任一步结果当作另一步参考。只有用户明确写出“再用前一步结果/融合/基于生成结果”时，才设置 depends_on_previous、input_artifact_ids 或 dependency_mode。`;
     }
     if(agentIsActiveConversation(ownerConversationId)){
         agentSending = true;
@@ -7812,11 +8266,12 @@ function agentValidateDirectPlan(parsed, {userText='', confirmedPlanText='', att
     const attachmentCount = Array.isArray(attachments) ? attachments.filter(item => item?.url).length : 0;
     const normalizedSkills = agentNormalizeSkillList(skills);
     const hasDetailedSkill = normalizedSkills.some(skill => String(skill?.content || '').trim().length >= 500);
-    const skillText = normalizedSkills.map(skill => String(skill?.content || '')).join('\n');
-    const hasPageContract = hasDetailedSkill && /页面作用/.test(skillText) && /AI\s*图片生成提示词/.test(skillText) && /文案排版说明/.test(skillText);
     const pageSetRequest = /(主图|详情页|详情图|套图|页面|海报)/.test(String(userText || '')) && Number(requestedCount) > 1;
     const explicitChainRefs = typeof agentExplicitChainAttachmentRequirements === 'function'
         ? agentExplicitChainAttachmentRequirements(userText, attachments)
+        : null;
+    const explicitGeneratedChain = typeof agentExplicitGeneratedChainRequirements === 'function'
+        ? agentExplicitGeneratedChainRequirements(userText, gens)
         : null;
     if(gens.length && /(?:缺少|未提供|没有).{0,12}(?:产品图|三视图|产品依据).{0,30}(?:停止|暂不|不能|待补充)|(?:停止|暂不|不能).{0,20}(?:正式生图|执行)/.test(String(confirmedPlanText || ''))){
         errors.push('阶段1已标记缺少产品依据，补充产品图/三视图或明确改为概念产品设计前不能执行');
@@ -7887,18 +8342,26 @@ function agentValidateDirectPlan(parsed, {userText='', confirmedPlanText='', att
     if(attachmentCount > 0 && gens.length && !gens.some(gen => gen?.use_attachments === true && Array.isArray(gen?.attachment_indices) && gen.attachment_indices.length)){
         errors.push('本轮提供了参考图，但规划没有任何步骤绑定参考图');
     }
-    if(hasPageContract && gens.length){
-        gens.forEach((gen, index) => {
-            const p = String(gen?.prompt || '');
-            const contractHits = [
-                /(?:产品|外观|结构|比例|材质|颜色|Logo|logo)/.test(p),
-                /(?:版式|标题|副标题|卖点|文案|留白)/.test(p),
-                /(?:光影|色调|背景材质|构图|商业摄影|参考风格)/.test(p)
-            ].filter(Boolean).length;
-            if(contractHits < 2) errors.push(`第${index + 1}步提示词未充分落实 Skill 的产品一致性、版式或风格约束`);
+    // 不再用固定的“产品/版式/风格”关键词猜测 Skill 是否落实。
+    // Skill 可以是单图、风格、表情包、分镜或任意自定义任务；阶段1策划与
+    // 阶段2最终 prompt 才是语义来源。这里仅检查 prompt 非空、参数、数量、
+    // 参考图和依赖等可执行结构，避免把合法的自定义词汇误判为失败。
+    const hasGeneratedArtifactBindings = gens.some(gen => String(gen?.output_artifact_id || '').trim()
+        || (Array.isArray(gen?.input_artifact_ids) && gen.input_artifact_ids.some(value => String(value || '').trim())));
+    if(explicitGeneratedChain && hasGeneratedArtifactBindings && gens.length > 1){
+        const initialCount = Math.max(1, Math.min(gens.length - 1, Number(explicitGeneratedChain.initialCount) || 1));
+        const outputArtifactIds = gens.slice(0, initialCount)
+            .map(gen => String(gen?.output_artifact_id || '').trim())
+            .filter(Boolean);
+        if(outputArtifactIds.length !== initialCount){
+            errors.push('并行前置任务缺少 output_artifact_id，无法在全部成功后作为融合输入');
+        }
+        gens.slice(initialCount).forEach((gen, offset) => {
+            const inputs = Array.isArray(gen?.input_artifact_ids) ? gen.input_artifact_ids.map(v => String(v || '').trim()) : [];
+            const missing = outputArtifactIds.filter(id => !inputs.includes(id));
+            if(missing.length) errors.push(`第${initialCount + offset + 1}步缺少前置产物 ${missing.join('、')} 的 input_artifact_ids 绑定`);
         });
-    }
-    if(explicitChainRefs && gens.length > 1){
+    }else if(explicitChainRefs && gens.length > 1){
         const firstOutput = String(gens[0]?.output_artifact_id || '').trim();
         if(!firstOutput) errors.push('串行任务第一步缺少 output_artifact_id，无法作为后续步骤的唯一前置产物');
         gens.slice(1).forEach((gen, offset) => {
@@ -7952,6 +8415,22 @@ function agentExplicitChainAttachmentRequirements(userText='', attachmentSource=
     return {initial, dependent};
 }
 
+function agentExplicitGeneratedAnchorRequirements(userText='', generations=[], confirmedPlanText=''){
+    const source = String(userText || '').trim();
+    const planText = String(confirmedPlanText || '').trim();
+    const gens = Array.isArray(generations) ? generations : [];
+    if(!source || gens.length < 2) return null;
+    // “每一步以上一步为基础”属于真正的多级串行链，不能压成所有页面都只连第1步。
+    if(/(?:每一步|逐步|逐张|依次).{0,16}(?:以上一步|以前一步|基于前一步|参考前一步)|(?:上一张|上一步).{0,16}(?:作为|用作).{0,12}(?:下一张|下一步)/.test(source)){
+        return null;
+    }
+    const directAnchor = /(?:再|然后|之后|接着).{0,80}?(?:基于|沿用|使用|只用|以|参考|按照).{0,40}?(?:同一|这(?:一|个|位|张)?|该|上述|前述|第一(?:步|张)|第\s*1\s*(?:步|张)|人物定稿|角色定稿|产品定稿|包装定稿|三视图|白底图|标准图|身份锚点|生成结果)/.test(source);
+    const planAnchor = /(?:后续|其余|第\s*[2-9]\s*步|step\s*[2-9]).{0,80}?(?:唯一.{0,16}锚点|只.{0,16}(?:第\s*1\s*步|step\s*1|第一步)|(?:都|全部).{0,16}依赖.{0,16}(?:第\s*1\s*步|step\s*1|第一步))|(?:第\s*1\s*步|step\s*1|第一步).{0,60}(?:作为|是).{0,20}(?:后续|其余|全部).{0,20}(?:唯一)?(?:参考|锚点|依据)/i.test(planText);
+    if(!directAnchor && !planAnchor) return null;
+    const firstId = String(gens[0]?.id || 'step_1').trim() || 'step_1';
+    return {anchorIndex:0, dependentStart:1, dependencyMode:'product_reference', dependsOnSteps:[firstId]};
+}
+
 function agentExplicitGeneratedChainRequirements(userText='', generations=[]){
     const source = String(userText || '').trim();
     const gens = Array.isArray(generations) ? generations : [];
@@ -7960,17 +8439,94 @@ function agentExplicitGeneratedChainRequirements(userText='', generations=[]){
     if(!chainMatch || typeof chainMatch.index !== 'number') return null;
     const initialText = source.slice(0, chainMatch.index);
     const dependentText = source.slice(chainMatch.index);
-    const hasExplicitOrder = /先(?:给我|为我)?\s*(?:制作|生成|设计|做|出)?/.test(initialText);
+    // “先生成 A，再生成 B，前两张都成功后……”是并行前置资产，
+    // 不能被“再”这个连接词误判成 A → B 的串行链。并行门禁是
+    // 用户明确写出的事实：只有门禁前的所有步骤成功，后续融合才可执行。
+    const parallelGate = source.match(/(?:前\s*(?:两|二|[2-9]|\d+)\s*张|(?:前面|所有|全部)\s*(?:步骤|任务|图片|结果)?).{0,12}?(?:都\s*)?(?:成功|完成|生成(?:完毕|好)?).{0,12}?(?:后|再|然后)/);
+    const hasExplicitOrder = /先\s*(?:(?:给我|为我)\s*)?(?:(?:分别|各自)\s*)?(?:制作|生成|设计|做|画|出)?/.test(initialText);
     const hasFoundationAssets = /(?:品牌说明页?|基础(?:设计)?图|Logo|logo|标志|三视图|包装(?:设计|图)?|产品定稿|白底图|标准图)/.test(initialText);
     const hasDownstreamPages = /(?:主图|详情(?:页|图)?|套图|页面|海报)/.test(dependentText);
-    if(!hasExplicitOrder || !hasFoundationAssets || !hasDownstreamPages) return null;
+    // 不把“先做产品定稿，再做页面”写死成唯一串行形式：人物、角色、
+    // 场景、道具等任意前序资产，只要后半句明确要拿它们继续组合/融合，
+    // 都是同一计划中的前序产物。
+    // 前序资产不一定是“生成”出来的：用户也常说“先把参考图改成 X，
+    // 再只用第一张结果做 Y”。改图同样会产出可供后续步骤引用的新资产。
+    const hasGeneratedAssets = /(?:制作|生成|设计|做|画|出|改成|变成|替换|重绘|修改)/.test(initialText);
+    const hasGenericDependentUse = /(?:融合|合成|结合|使用|只用|基于|参考|让(?:这|两|它|其|前)|将(?:这|两|它|其|前)|把(?:这|两|它|其|前))/.test(dependentText);
+    // 组合动作必须是正向表达；例如“不要融合”只是在约束执行，
+    // 不能把单锚点人物/产品链误判成 fusion。
+    // Keep the generated-chain detector self-contained for isolated consumers
+    // (some hosts load this function without the later fusion helpers).  A
+    // negated phrase such as “不要融合” must never turn a plain sequence into
+    // a fusion dependency.
+    const hasPositiveFusion = text => {
+        const t = String(text || '');
+        const isNegated = index => {
+            const before = t.slice(Math.max(0, Number(index) - 24), Number(index));
+            return /(?:不|未|无|不要|不需要|无需|不能|不可|不得|禁止|严禁|避免|勿|取消|去掉|不再|不是|并非|而非|不做|不进行)\s*(?:再|将|把|让|进行|做|使用|去)?\s*$/.test(before);
+        };
+        const termRe = /组合|结合|合成|融合|拼在一起|合并|合在一起|放在一起|拼合|合成为|合成一张|合成一图|同框|追逐|打架|互动|对峙|拥抱|共同出现在|一张完整画面/g;
+        let match;
+        while((match = termRe.exec(t))){
+            if(!isNegated(match.index)) return true;
+        }
+        const pairRe = /(?:把|将)这(?:两|二|三|四|五|六|七|八|九|十|\d+)张[^。；;\n]{0,24}(?:放在一起|拼在一起|组合|结合|合成|融合|合并|同框|一张完整画面)/g;
+        while((match = pairRe.exec(t))){
+            if(!isNegated(match.index)) return true;
+        }
+        return false;
+    };
+    const explicitFusionAction = hasPositiveFusion(dependentText);
+    const multiFoundation = /(?:两|二|三|四|五|六|七|八|九|十|[2-9]|\d+)\s*张/.test(initialText)
+        || /分别.{0,80}(?:、|，|和|与|及)/.test(initialText)
+        || /(?:Logo|logo|三视图|包装|白底图|人物|角色|猫|狗).{0,40}(?:、|，|和|与|及).{0,40}(?:Logo|logo|三视图|包装|白底图|人物|角色|猫|狗)/.test(initialText);
+    // 多前置素材 + 最终组合属于 fusion；单一人物/产品定稿派生多页属于
+    // product_reference，由 agentExplicitGeneratedAnchorRequirements 处理。
+    const isProductPageChain = hasFoundationAssets && hasDownstreamPages && (explicitFusionAction || multiFoundation);
+    const isGenericAssetChain = hasGeneratedAssets && hasGenericDependentUse && (explicitFusionAction || multiFoundation);
+    const isParallelAssetChain = !!parallelGate && hasGeneratedAssets && hasGenericDependentUse;
+    if(!hasExplicitOrder || (!isProductPageChain && !isGenericAssetChain && !isParallelAssetChain)) return null;
 
-    const countMatch = initialText.match(/([1-9]\d?|[一二两三四五六七八九十]+)\s*张/);
+    const countMatch = initialText.match(/([1-9]\d?|[一二两三四五六七八九十]+)\s*张/)
+        || (parallelGate && parallelGate[0].match(/(?:前\s*)([二两三四五六七八九]|[2-9]|\d+)\s*张/));
     const rawCount = countMatch?.[1] || '';
     const parsedCount = /^\d+$/.test(rawCount) ? Number(rawCount) : agentCnNumToInt(rawCount);
-    const initialCount = Math.max(0, Math.min(gens.length - 1, Number(parsedCount) || 0));
+    const inferredInitialCount = (isGenericAssetChain || isParallelAssetChain) ? gens.length - 1 : 0;
+    const initialCount = Math.max(0, Math.min(gens.length - 1, Number(parsedCount) || inferredInitialCount));
     if(initialCount < 1) return null;
     return {initialCount, dependentStart:initialCount, dependencyMode:'fusion'};
+}
+
+function agentApplyExplicitGeneratedAnchorRequirements(parsed, userText='', attachments=[], confirmedPlanText=''){
+    const gens = Array.isArray(parsed?.generations) ? parsed.generations : [];
+    const requirements = agentExplicitGeneratedAnchorRequirements(userText, gens, confirmedPlanText);
+    if(!requirements || agentExplicitGeneratedChainRequirements(userText, gens)) return {applied:false, requirements};
+    const attachmentCount = Array.isArray(attachments) ? attachments.filter(item => item?.url).length : 0;
+    const anchor = gens[requirements.anchorIndex];
+    if(!anchor) return {applied:false, requirements};
+    const anchorId = String(anchor.id || `step_${requirements.anchorIndex + 1}`).trim() || 'step_1';
+    const artifactId = String(anchor.output_artifact_id || '').trim() || `artifact_${anchorId.replace(/[^a-zA-Z0-9_.-]+/g, '_')}_output`;
+    anchor.output_artifact_id = artifactId;
+    anchor.depends_on_previous = false;
+    anchor.use_previous_results = false;
+    anchor.dependency_mode = 'none';
+    anchor.depends_on_steps = [];
+    gens.slice(requirements.dependentStart).forEach(gen => {
+        if(!gen || typeof gen !== 'object') return;
+        gen.depends_on_previous = true;
+        gen.use_previous_results = true;
+        gen.use_last_outputs = false;
+        gen.dependency_mode = 'product_reference';
+        gen.depends_on_steps = [anchorId];
+        gen.input_artifact_ids = [artifactId];
+        // 单锚点串行链的后续步骤只允许引用锚点产物；即使首步有用户
+        // 原图，也不能把原图再次偷偷挂到后续节点，否则会变成“原图+
+        // 第一张结果”的混合引用。用户附件只绑定到首步。
+        gen.attachment_indices = [];
+        gen.use_attachments = false;
+    });
+    parsed.explicit_generated_anchor_requirements = requirements;
+    return {applied:true, requirements, anchorId, artifactId};
 }
 
 function agentApplyExplicitChainAttachmentRequirements(parsed, userText='', attachments=[]){
@@ -7997,28 +8553,89 @@ function agentApplyExplicitChainAttachmentRequirements(parsed, userText='', atta
     return {applied:true, requirements};
 }
 
+// A user can clearly request a serial chain while an otherwise valid LLM plan
+// omits the artifact bookkeeping fields. Those fields do not add any visual
+// meaning or rewrite a prompt: they are only the stable link between the
+// already-planned first output and its downstream step.
+function agentEnsureExplicitChainArtifactBindings(parsed, userText='', attachments=[]){
+    const gens = Array.isArray(parsed?.generations) ? parsed.generations : [];
+    const requirements = agentExplicitChainAttachmentRequirements(userText, attachments);
+    const generatedRequirements = agentExplicitGeneratedChainRequirements(userText, gens);
+    const serialByPlan = gens.slice(1).some(gen => gen && (
+        gen.depends_on_previous === true
+        || gen.use_previous_results === true
+        || ['product_reference', 'fusion'].includes(String(gen.dependency_mode || '').trim().toLowerCase())
+        || (Array.isArray(gen.depends_on_steps) && gen.depends_on_steps.length > 0)
+    ));
+    // Trust the LLM's explicit dependency fields as well as the user's serial
+    // wording. The latter has many natural Chinese forms ("第一张成功后",
+    // "再只用第一张", etc.) and must not be the only gate for bookkeeping.
+    if((!requirements && !serialByPlan && !generatedRequirements) || gens.length < 2) return {applied:false, requirements, outputArtifactId:''};
+    const initialCount = Math.max(1, Math.min(gens.length - 1, Number(generatedRequirements?.initialCount) || 1));
+    const outputArtifactIds = [];
+    gens.slice(0, initialCount).forEach((gen, index) => {
+        if(!gen || typeof gen !== 'object') return;
+        const stepKey = String(gen.id || `step_${index + 1}`).trim().replace(/[^a-zA-Z0-9_.-]+/g, '_').slice(0, 80) || `step_${index + 1}`;
+        const artifactId = String(gen.output_artifact_id || '').trim() || `artifact_${stepKey}_output`;
+        gen.output_artifact_id = artifactId;
+        outputArtifactIds.push(artifactId);
+    });
+    // 并行前置步骤彼此独立；只有门禁后的步骤才挂载全部前置产物。
+    // 普通串行链 initialCount=1，因此行为与原逻辑一致。
+    gens.slice(initialCount).forEach(gen => {
+        if(!gen || typeof gen !== 'object') return;
+        const inputs = Array.isArray(gen.input_artifact_ids)
+            ? gen.input_artifact_ids.map(value => String(value || '').trim()).filter(Boolean)
+            : [];
+        outputArtifactIds.forEach(artifactId => { if(!inputs.includes(artifactId)) inputs.push(artifactId); });
+        gen.input_artifact_ids = inputs;
+    });
+    parsed.explicit_chain_artifact_bindings = {output_artifact_id:outputArtifactIds[0] || '', output_artifact_ids:outputArtifactIds, requirements, generatedRequirements};
+    return {applied:true, requirements, outputArtifactId:outputArtifactIds[0] || '', outputArtifactIds};
+}
+
 function agentApplyExplicitGeneratedChainRequirements(parsed, userText='', attachments=[]){
     const gens = Array.isArray(parsed?.generations) ? parsed.generations : [];
     const attachmentCount = Array.isArray(attachments) ? attachments.filter(item => item?.url).length : 0;
-    // 用户上传图与同计划前序产物是两套引用空间；有真实附件时继续交给附件链路处理。
-    if(attachmentCount > 0) return {applied:false, requirements:null};
     const requirements = agentExplicitGeneratedChainRequirements(userText, gens);
-    if(!requirements) return {applied:false, requirements};
+    // “第一步成功后，再只以第一步结果作为参考”是单锚点串行链，
+    // 不是多素材融合。这个入口也可能被旧调用方直接调用，因此在这里
+    // 复用单锚点处理，确保与主流程的识别结果一致。
+    if(!requirements){
+        const anchorRequirements = agentExplicitGeneratedAnchorRequirements(userText, gens);
+        if(anchorRequirements){
+            const appliedAnchor = agentApplyExplicitGeneratedAnchorRequirements(parsed, userText, attachments);
+            return {
+                applied: !!appliedAnchor?.applied,
+                requirements: appliedAnchor?.requirements || anchorRequirements,
+                anchorId: appliedAnchor?.anchorId || '',
+                artifactId: appliedAnchor?.artifactId || ''
+            };
+        }
+        return {applied:false, requirements};
+    }
     const foundationIds = gens.slice(0, requirements.initialCount)
         .map((gen, index) => String(gen?.id || `step_${index + 1}`).trim())
         .filter(Boolean);
     gens.forEach((gen, index) => {
         if(!gen || typeof gen !== 'object') return;
-        // 没有用户上传附件时，LLM 生成的 attachment_indices 只能是把前序产物误当成附件，必须清除。
-        gen.attachment_indices = [];
-        gen.use_attachments = false;
         gen.use_last_outputs = false;
         if(index < requirements.initialCount){
+            // 首阶段仍可引用用户本轮明确提供的原图；仅在没有附件时清除
+            // LLM 把“步骤序号”误填到 attachment_indices 的情况。
+            if(attachmentCount <= 0){
+                gen.attachment_indices = [];
+                gen.use_attachments = false;
+            }
             gen.depends_on_previous = false;
             gen.use_previous_results = false;
             gen.dependency_mode = 'none';
             gen.depends_on_steps = [];
         }else{
+            // 后续“只用第一张结果”的引用属于前序产物，而不是用户附件。
+            // 必须清掉 attachment_indices，否则执行层会把原图重新连进来。
+            gen.attachment_indices = [];
+            gen.use_attachments = false;
             gen.depends_on_previous = true;
             gen.use_previous_results = true;
             // fusion 在执行器中的含义是挂载第一批所有成功图，正好对应 Logo + 三视图 + 包装。
@@ -8028,6 +8645,94 @@ function agentApplyExplicitGeneratedChainRequirements(parsed, userText='', attac
     });
     parsed.explicit_generated_chain_requirements = requirements;
     return {applied:true, requirements};
+}
+
+// attachment_indices 只允许指向用户在本轮明确提供的附件，绝不能借它
+// 表示“第1/第2个计划步骤”。前序生成结果由 depends_on_steps / dependency_mode
+// 传递。否则融合任务会在结构检查阶段把步骤序号误判成越界参考图。
+function agentClearAttachmentIndicesWithoutUserAttachments(parsed, attachments=[]){
+    const attachmentCount = Array.isArray(attachments) ? attachments.filter(item => item?.url).length : 0;
+    if(attachmentCount > 0 || !Array.isArray(parsed?.generations)) return false;
+    let changed = false;
+    parsed.generations.forEach(gen => {
+        if(!gen || typeof gen !== 'object') return;
+        if((Array.isArray(gen.attachment_indices) && gen.attachment_indices.length) || gen.use_attachments === true){
+            gen.attachment_indices = [];
+            gen.use_attachments = false;
+            changed = true;
+        }
+    });
+    return changed;
+}
+
+// 产物 ID 只用于执行层的结构绑定，不能泄漏到用户可见或 API 使用的提示词。
+// LLM 偶尔会把 artifact_1 / artifact_step_1_output 直接写进 prompt；这里
+// 按本步 input_artifact_ids 的顺序翻译成自然的参考图序号，保留视觉描述，
+// 不改变任何依赖关系。
+function agentSanitizeInternalArtifactTokens(gen){
+    if(!gen || typeof gen !== 'object') return gen;
+    const ids = Array.isArray(gen.input_artifact_ids)
+        ? gen.input_artifact_ids.map(value => String(value || '').trim().toLowerCase()).filter(Boolean)
+        : [];
+    const cn = ['一','二','三','四','五','六','七','八','九','十'];
+    const mode = String(gen.dependency_mode || '').trim().toLowerCase();
+    const dependent = !!gen.depends_on_previous || !!gen.use_previous_results
+        || mode === 'product_reference' || mode === 'fusion';
+    const source = String(gen.prompt || '').trim();
+    if(!source) return gen;
+    const clean = source.replace(/\bartifact_[A-Za-z0-9_.-]+\b/gi, token => {
+        const key = String(token || '').toLowerCase();
+        const localIndex = ids.indexOf(key);
+        if(localIndex >= 0) return `参考图${cn[localIndex] || (localIndex + 1)}`;
+        const numeric = key.match(/^artifact_(\d+)(?:$|[_-])/);
+        const n = numeric ? Number(numeric[1]) : 0;
+        if(n >= 1 && n <= cn.length) return `参考图${cn[n - 1]}`;
+        return dependent ? '前序参考图' : '参考图';
+    }).replace(/\s{2,}/g, ' ').replace(/参考\s+参考图/g, '参考图').trim();
+    gen.prompt = clean;
+    gen.plannedPrompt = clean;
+    gen.professionalPrompt = clean;
+    return gen;
+}
+
+// LLM 偶尔把执行参考图写成“参考图1”或 0-based 的“附件0”。连线和
+// attachment_indices 才是真正的引用事实，因此在节点创建前只做编号格式
+// 归一：步骤卡、复制文本、节点和 API 始终使用同一条纯净提示词。
+// 这里不增删视觉描述、不补默认风格，也不改动任何依赖关系。
+function agentCanonicalizePlannedReferenceLabels(gens, attachments=[]){
+    if(!Array.isArray(gens)) return gens;
+    // 保持该编号归一化 helper 可独立复用（例如导入旧画布的轻量测试环境）。
+    if(typeof agentSanitizeInternalArtifactTokens === 'function') gens.forEach(agentSanitizeInternalArtifactTokens);
+    const refs = (Array.isArray(attachments) ? attachments : []).filter(item => item?.url);
+    if(!refs.length) return gens;
+    const cn = {1:'一',2:'二',3:'三',4:'四',5:'五',6:'六',7:'七',8:'八',9:'九',10:'十'};
+    const cnToNum = {一:1,二:2,三:3,四:4,五:5,六:6,七:7,八:8,九:9,十:10};
+    const toNumber = value => /^\d+$/.test(String(value || '')) ? Number(value) : (cnToNum[String(value || '')] || 0);
+    gens.forEach(gen => {
+        if(!gen || !String(gen.prompt || '').trim()) return;
+        const indices = Array.isArray(gen.attachment_indices)
+            ? gen.attachment_indices.map(Number).filter(index => Number.isInteger(index) && index >= 0 && index < refs.length)
+            : [];
+        if(!indices.length) return;
+        const globalToLocal = new Map(indices.map((globalIndex, localIndex) => [globalIndex + 1, localIndex + 1]));
+        const label = localIndex => `图${cn[localIndex] || String(localIndex)}`;
+        let prompt = String(gen.prompt).trim();
+        // “附件0”是 LLM 采用了 attachment_indices 的 0-based 表达。
+        prompt = prompt.replace(/(?:附件|attachment)\s*(\d+)/gi, (all, raw) => {
+            const globalIndex = Number(raw);
+            const localIndex = indices.indexOf(globalIndex) + 1;
+            return localIndex > 0 ? label(localIndex) : all;
+        });
+        // “参考图1”是用户输入框全局序号，转成当前节点连线顺序的图一/图二。
+        prompt = prompt.replace(/参考图\s*([0-9一二三四五六七八九十]+)/g, (all, raw) => {
+            const localIndex = globalToLocal.get(toNumber(raw));
+            return localIndex ? label(localIndex) : all;
+        });
+        gen.prompt = prompt;
+        gen.plannedPrompt = prompt;
+        gen.professionalPrompt = prompt;
+    });
+    return gens;
 }
 
 async function processAgentLlmResult(result, text, attachments, userMsg, options={}){
@@ -8145,6 +8850,21 @@ if(!Array.isArray(parsed.generations)) parsed.generations = [];
     if(requestedCount <= 1) requestedCount = resolveFinalGenCount(text).count;
     // 如果最终数量 <= 1，相当于没有明确请求多张，设为 0 不触发数量逻辑
     if(requestedCount <= 1) requestedCount = 0;
+    // 旧协议 prompts 是已完成的规划结果，不应该在全自动模式被误当成
+    // “等待用户确认”。只在阶段2的全自动执行中无损转换；半自动、选项、
+    // 阶段1和已经有新协议 generations 的场景全部保持原行为。
+    const shouldBridgeLegacyPrompts = agentShouldBridgeLegacyPrompts({
+        thinkingModeOn,
+        stage: options.stage,
+        runMode: agentGetRunMode(),
+        options: parsed.options,
+        generations: parsed.generations,
+        prompts: parsed.prompts
+    });
+    if(shouldBridgeLegacyPrompts){
+        parsed.generations = agentPromptsToGenerations(parsed.prompts);
+        parsed.prompts = [];
+    }
     if(thinkingModeOn){
         const userModifyRe = /改成|换成|转换成|修改为|变成|转为|改为|转成|调整为|修改成|变回|调成|重新画|重画|重新生成|修改一下|改一下|调整一下/i;
         const isModifyRequest = userModifyRe.test(text);
@@ -8326,10 +9046,39 @@ if(!Array.isArray(parsed.generations)) parsed.generations = [];
             userMsg?.skills || []
         );
         const directPlanUserText = String(userMsg?.text || text || '').trim();
-        agentApplyExplicitChainAttachmentRequirements(parsed, directPlanUserText, attachments || userMsg?.images || []);
+        const directPlanAttachments = attachments || userMsg?.images || [];
+        // 先识别“前置步骤并行、门禁后融合”的结构，再处理普通串行链。
+        // 若先套用普通“再”规则，会把第二个独立前置步骤错误连到第一步。
+        const explicitGeneratedChain = agentExplicitGeneratedChainRequirements(directPlanUserText, parsed.generations);
+        const explicitGeneratedAnchor = !explicitGeneratedChain
+            ? agentExplicitGeneratedAnchorRequirements(directPlanUserText, parsed.generations, options.understanding || userMsg?.understanding || '')
+            : null;
+        if(explicitGeneratedChain){
+            agentApplyExplicitGeneratedChainRequirements(parsed, directPlanUserText, directPlanAttachments);
+        }else if(explicitGeneratedAnchor){
+            agentApplyExplicitGeneratedAnchorRequirements(parsed, directPlanUserText, directPlanAttachments, options.understanding || userMsg?.understanding || '');
+        }else{
+            agentApplyExplicitChainAttachmentRequirements(parsed, directPlanUserText, directPlanAttachments);
+        }
+        agentEnsureExplicitChainArtifactBindings(parsed, directPlanUserText, directPlanAttachments);
+        // Ensure the thin dependency binding is part of the real LLM -> execution path.
+        // It only fixes dependency metadata from user semantics; prompts remain verbatim.
+        agentApplyComplexRequestGuards(
+            parsed,
+            directPlanUserText,
+            directPlanAttachments,
+            Array.isArray(userMsg?.skills) ? userMsg.skills : []
+        );
+        agentMarkGenerationDependencies(
+            parsed.generations,
+            directPlanUserText,
+            parsed.shared_style || parsed.generations?.[0]?.shared_style || ''
+        );
         // 无上传图但明确“先生成基础图、再制作主图/详情页”时，引用的是同计划前序产物，
         // 不能把生成结果编号误塞进 attachment_indices。
-        agentApplyExplicitGeneratedChainRequirements(parsed, directPlanUserText, attachments || userMsg?.images || []);
+        // 任何无用户附件的计划都必须清除 LLM 误写的步骤序号；前序生成引用
+        // 仍完整保留在 depends_on_previous / depends_on_steps 中。
+        agentClearAttachmentIndicesWithoutUserAttachments(parsed, attachments || userMsg?.images || []);
         const directPlanErrors = agentValidateDirectPlan(parsed, {
             userText: directPlanUserText,
             confirmedPlanText: options.understanding || userMsg?.understanding || '',
@@ -8343,6 +9092,11 @@ if(!Array.isArray(parsed.generations)) parsed.generations = [];
             parsed.generations = [];
             parsed.options = [];
             parsed.reply = `${String(parsed.reply || '').trim()}${String(parsed.reply || '').trim() ? AGENT_NL + AGENT_NL : ''}规划结构检查未通过，已阻止错误执行：${directPlanErrors.join('；')}。请修改策划或参数后再确认；系统不会自动重新调用 LLM。`;
+        }
+        // 在 attachment_indices 已冻结并通过结构检查后，统一提示词中的图号。
+        // 这不会改变模型已定稿的视觉内容，只使用户看到的提示词与真实连线顺序一致。
+        if(!directPlanErrors.length){
+            agentCanonicalizePlannedReferenceLabels(parsed.generations, attachments || userMsg?.images || []);
         }
     }
 const understandingFromOpt = String(options.understanding || userMsg?.understanding || '').trim();
@@ -8792,69 +9546,51 @@ function agentValidateUnderstandingStage(text='', options={}){
     const normalizedSkills = agentNormalizeSkillList(skills);
     const hasDetailedSkill = normalizedSkills.some(skill => String(skill?.content || '').trim().length >= 500);
     const skillText = normalizedSkills.map(skill => String(skill?.content || '')).join('\n');
-    const hasPageContract = hasDetailedSkill && /页面作用/.test(skillText) && /AI\s*图片生成提示词/.test(skillText) && /文案排版说明/.test(skillText);
-    if(hasDetailedSkill && body.length < 300) errors.push('阶段1策划内容过短，未完整吸收 Skill');
+    // Skill 的输出格式由 Skill 自己决定。过去这里看到电商 Skill 文本里有
+    // “页面作用/AI 图片生成提示词/文案排版说明”就强制套用固定页字段，
+    // 导致合法的单图、风格和自定义套图策划被误判为不完整。阶段1只检查
+    // 是否有可执行的正文与任务单；显式 required_fields 才属于本轮的字段契约。
+    const explicitRequiredFields = taskSpec
+        ? taskSpec.deliverables.flatMap(item => Array.isArray(item.required_fields) ? item.required_fields : [])
+        : [];
+    const hasTaskEvidence = !!(taskSpec?.deliverables?.length)
+        || /(?:生成|制作|设计|修改|替换|融合|主图|详情页|海报|表情包|三视图|提示词)/.test(body);
+    if(hasDetailedSkill && !taskSpec && body.length < 300) errors.push('阶段1策划内容过短，未完整吸收 Skill');
+    if(taskSpec && body.length < 80) errors.push('阶段1策划正文过短，无法说明本轮任务');
+    if(!hasTaskEvidence) errors.push('阶段1未说明可执行的任务或成果');
     const lines = body.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
     const last = lines[lines.length - 1] || '';
     const isStructuredSuite = /套图|整套|三视图/.test(String(userText || ''))
         || (/(?:主图|详情页|详情图)/.test(String(userText || '')) && /(?:再|然后|先|[2-9]\s*张|[二三四五六七八九十]\s*张)/.test(String(userText || '')));
-    if((hasDetailedSkill || isStructuredSuite)
+    if(!taskSpec && (hasDetailedSkill || isStructuredSuite)
         && (/^(?:#{1,6}\s+|【[^】]+】\s*$)/.test(last) || /^(?:[^。！？!?]{1,40})[：:]$/.test(last))){
         errors.push('阶段1内容疑似在标题或字段名处中断');
     }
-    if(hasPageContract){
-        const roleLine = /(?:当前采用|采用的)?\s*(?:Skill\s*)?(?:角色|身份|专业角色)/i.test(body)
-            && /视觉设计|品牌策划|电商转化|商业美术|版式设计|提示词专家/.test(body);
-        if(!roleLine) errors.push('阶段1未明确声明 Skill 的专业角色定位');
-        if(!/产品依据|概念产品设计/.test(body)) errors.push('阶段1未说明产品依据或概念产品设计边界');
-        const globalFields = [
-            ['视觉整体定位','visual_positioning'],
-            ['统一风格提示词','unified_style_prompt'],
-            ['统一负面提示词','unified_negative_prompt']
-        ];
-        const bodyHasGlobalContract = globalFields.every(([label]) => {
-            const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            return new RegExp(`(?:^|\\n)\\s*(?:#{1,6}\\s*)?(?:[-*+]\\s*)?(?:\\*\\*)?${escaped}(?:\\*\\*)?\\s*[：:]?`, 'm').test(body);
-        });
-        const structuredGlobalContract = taskSpec?.global_contract || null;
-        const taskSpecHasGlobalContract = !!structuredGlobalContract
-            && globalFields.every(([, key]) => String(structuredGlobalContract?.[key] || '').trim());
-        if(!bodyHasGlobalContract && !taskSpecHasGlobalContract){
-            globalFields.forEach(([label, key]) => {
-                if(!body.includes(label) && !String(structuredGlobalContract?.[key] || '').trim()){
-                    errors.push(`阶段1缺少 Skill 要求的“${label}”`);
-                }
-            });
-            if(!errors.some(error => /阶段1缺少 Skill 要求/.test(error))){
-                errors.push('阶段1的三项全局约束必须完整集中在正文标题或 AGENT_TASK_SPEC.global_contract');
-            }
-        }
-        const pageCount = taskSpec
-            ? taskSpec.deliverables.reduce((sum, item) => sum + Math.max(1, Number(item.count) || 1), 0)
-            : 0;
-        if(taskSpec && taskSpec.deliverables.some(item => ['main','detail'].includes(item.type) && Number(item.count) > 1)){
-            errors.push('阶段1任务单必须把每个主图/详情页单独列为 count=1，不能用聚合数量丢失页面映射');
-        }
-        if(pageCount > 0){
-            const fieldChecks = [
-                ['页面作用', /页面作用/g],
-                ['画面内容', /画面内容/g],
-                ['版式结构', /版式结构/g],
-                ['AI 图片生成提示词', /AI\s*图片生成提示词/g],
-                ['文案排版说明', /文案排版说明/g]
-            ];
-            fieldChecks.forEach(([label, re]) => {
-                const matches = body.match(re) || [];
-                if(matches.length < pageCount) errors.push(`阶段1的“${label}”字段不足：应至少覆盖 ${pageCount} 页，实际 ${matches.length} 页`);
-            });
-        }
+    // 不再检查固定的“角色定位/产品依据/三项全局标题/五个逐页字段”。
+    // 若 Skill 确实声明了自定义字段，字段契约会随 taskSpec.required_fields
+    // 传入执行层，由阶段2逐项绑定；正文可以使用 Skill 的原生标题或自然语言。
+    if(explicitRequiredFields.length && body.length < 80){
+        errors.push('阶段1未提供 Skill 声明的字段内容');
     }
     const source = String(userText || '');
-    const mainMatch = source.match(/(\d+|[一二两三四五六七八九十]+)\s*张?\s*主图/);
-    const detailMatch = source.match(/(\d+|[一二两三四五六七八九十]+)\s*张?\s*详情(?:页|图)?/);
+    // 数量必须绑定到“张 + 类型”，并允许类型前出现比例。
+    // 旧正则会从“2张1:1主图/2张9:16详情页”重新从冒号后的数字开始匹配，
+    // 把比例的 1/16 误报成数量，导致合法策划被错误拦截。
+    const sectionCountToken = '(\\d+|[一二两三四五六七八九十百]+)';
+    const sectionCountRe = new RegExp(`(?:^|[^\\d:])${sectionCountToken}\\s*张(?:\\s*\\d+\\s*:\\s*\\d+)?\\s*(主图|详情(?:页|图)?)`, 'g');
+    const sectionCounts = [];
+    let sectionMatch;
+    while((sectionMatch = sectionCountRe.exec(source))){
+        const rawCount = sectionMatch[1];
+        const type = sectionMatch[2].startsWith('主图') ? 'main' : 'detail';
+        const value = /^\\d+$/.test(rawCount) ? Number(rawCount) : agentCnNumToInt(rawCount);
+        if(Number.isFinite(value) && value > 0) sectionCounts.push({type, value});
+    }
+    const mainMatch = sectionCounts.find(item => item.type === 'main') || null;
+    const detailMatch = sectionCounts.find(item => item.type === 'detail') || null;
     if(mainMatch && detailMatch){
-        const mainCount = /^\d+$/.test(mainMatch[1]) ? Number(mainMatch[1]) : agentCnNumToInt(mainMatch[1]);
-        const detailCount = /^\d+$/.test(detailMatch[1]) ? Number(detailMatch[1]) : agentCnNumToInt(detailMatch[1]);
+        const mainCount = mainMatch.value;
+        const detailCount = detailMatch.value;
         if(taskSpec){
             const plannedMainCount = taskSpec.deliverables
                 .filter(item => item.type === 'main')
@@ -8864,7 +9600,10 @@ function agentValidateUnderstandingStage(text='', options={}){
                 .reduce((sum, item) => sum + item.count, 0);
             if(plannedMainCount !== mainCount) errors.push(`阶段1任务单主图数量应为 ${mainCount} 张，实际为 ${plannedMainCount} 张`);
             if(plannedDetailCount !== detailCount) errors.push(`阶段1任务单详情页数量应为 ${detailCount} 张，实际为 ${plannedDetailCount} 张`);
-        }else{
+        // 没有任务单时，只有多页套图才需要用分区与页码证明页数完整。
+        // 一主图 + 一详情页这类短任务可以用自然语言完整说明；模型偶尔漏掉
+        // AGENT_TASK_SPEC 时不能因为没有 Markdown 分区而误拦截到阶段2。
+        }else if(mainCount > 1 || detailCount > 1){
             const mainStart = body.search(/(?:第一部分|主图方案|主图规划|#{1,6}\s*(?:\d+[.、)]?\s*)?主图(?=\s|\d|[：:(（]))/);
             const detailStart = body.search(/(?:第二部分|详情页方案|详情页规划|#{1,6}\s*(?:\d+[.、)]?\s*)?详情(?:页|图)?(?=\s|\d|[：:(（]))/);
             if(mainStart < 0 || detailStart < 0 || detailStart <= mainStart){
@@ -8981,6 +9720,16 @@ async function sendAgentMessage(){
         }
     }
     const text = String(agentGetInputValue() || '').trim();
+    // 发送按钮可能在画布选区同步计时器之前被点击；在清空输入框前再捕获一次当前选中的图片。
+    // 仅使用实时选区，不读取历史结果，避免普通新任务偷偷继承上一轮图片。
+    if(!agentGhostAttachments.length && !(agentState.attachments || []).some(att => att?.url)
+        && agentSendSelectionSnapshot.length
+        && typeof agentForceGhostFromNodes === 'function'){
+        try{
+            const selectedNodes = agentSendSelectionSnapshot.slice();
+            if(selectedNodes.length) agentForceGhostFromNodes(selectedNodes, {reason:'send'});
+        }catch(_){ }
+    }
     // 发送前先把灰态也确认，避免用户选了多张参考图却忘记点输入框
     if(agentGhostAttachments.length) confirmAgentGhostAttachment();
     try{ agentSanitizeComposerResidue(); }catch(_){ }
@@ -8995,6 +9744,9 @@ async function sendAgentMessage(){
         label: `参考图${i + 1}`,
         name: att.name || `Image${i + 1}`
     }));
+    // 快照仅属于这一次发送。发送后必须释放，绝不让后续无参考图请求
+    // 从上一轮用户选图或宿主自动选中结果中继承附件。
+    agentSendSelectionSnapshot = [];
     if(!text && !attachments.length) return;
     if(!agentTryAcquireGlobalTask(ownerConversationId)){
         if(agentGlobalTaskOwnedByOther(ownerConversationId)) agentNotifyGlobalTaskBlocked();
@@ -9042,18 +9794,39 @@ async function sendAgentMessage(){
     userMsg.bypassThinking = bypassThinking;
     try{ agentEnsureActiveConversation(); }catch(_){}
     userMsg.conversationId = ownerConversationId;
-    // 发送瞬间冻结本轮上下文：后续即使切换对话或改变画布选区，
-    // 两个 LLM 阶段也继续使用同一份会话历史和 Canvas Snapshot。
+    const semanticUserText = String(userMsg?.text || text || '').trim();
+    // 发送瞬间冻结本轮上下文。明确的新生图/制作需求默认不继承前一条
+    // 任务的交付物；只有用户明确说“继续/修改上一张/基于刚才”等才注入。
+    // 这样保留对话记忆，同时不会把两个独立产品任务合并。
     const includeAutoContext = agentState?.autoContext !== false;
-    userMsg.contextEnabled = includeAutoContext;
-    userMsg.contextHistory = includeAutoContext ? agentFreshTaskHistoryMessages(ownerConversationId, {
+    const initialIntent = agentClassifyIntent({
+        text:semanticUserText,
+        attachments,
+        skills:Array.isArray(userMsg?.skills) ? userMsg.skills : []
+    });
+    const explicitContinuation = agentIsExplicitTaskContinuation(semanticUserText);
+    const hasCurrentTurnTaskInputs = attachments.some(a => a?.url)
+        || (Array.isArray(userMsg?.skills) && userMsg.skills.length > 0)
+        || agentLooksLikeClearGenRequest(semanticUserText);
+    // 只在聊天/查看画布/用户明确续作时继承上下文。任何带有本轮生图输入的
+    // 新任务都必须是 fresh，避免选中节点或上一轮结果被当作隐式参考。
+    const inheritConversationContext = includeAutoContext && !(
+        hasCurrentTurnTaskInputs && !explicitContinuation
+    ) && (
+        initialIntent.intent === 'chat'
+        || initialIntent.intent === 'inspect_canvas'
+        || explicitContinuation
+    );
+    userMsg.contextEnabled = inheritConversationContext;
+    userMsg.contextMode = inheritConversationContext ? 'continuation' : 'fresh';
+    userMsg.contextHistory = inheritConversationContext ? agentFreshTaskHistoryMessages(ownerConversationId, {
         excludeMessageId: userMsg.id,
         max: 12,
         maxChars: AGENT_HISTORY_CHAR_MAX
     }) : [];
-    userMsg.canvasSnapshot = includeAutoContext ? agentCaptureCanvasSnapshot({scope:'selection', includeNeighbors:true}) : null;
+    userMsg.canvasSnapshot = inheritConversationContext ? agentCaptureCanvasSnapshot({scope:'selection', includeNeighbors:true}) : null;
     userMsg.contextSources = agentBuildContextSources(ownerConversationId, userMsg.contextHistory, userMsg.canvasSnapshot);
-    try{ userMsg.memorySnapshot = includeAutoContext ? agentSanitizeConversationMemory(agentActiveConversationMemory(ownerConversationId)) : null; }
+    try{ userMsg.memorySnapshot = inheritConversationContext ? agentSanitizeConversationMemory(agentActiveConversationMemory(ownerConversationId)) : null; }
     catch(_){ userMsg.memorySnapshot = null; }
     // 用户消息固定写入发起任务的对话；上下文先冻结，避免把本条消息重复写进 memory。
     agentPushMessageToConversation(ownerConversationId, userMsg);
@@ -9064,7 +9837,6 @@ async function sendAgentMessage(){
     agentThinking = true;
     agentThinkingConversationId = ownerConversationId;
     // 保存待处理消息，刷新后可恢复（绑定对话）
-    const semanticUserText = String(userMsg?.text || text || '').trim();
     const ownerRequestId = uid('llmreq');
     userMsg._pendingRequestId = ownerRequestId;
     agentSetConversationPending(ownerConversationId, {
@@ -9108,6 +9880,18 @@ async function sendAgentMessage(){
         : agentFreshTaskHistoryMessages(ownerConversationId, {excludeMessageId:userMsg.id, max:12});
     const imageUrls = contextImages.slice(0, AGENT_LLM_IMAGE_MAX).map(i => i.url);
     try {
+        const intent = agentClassifyIntent({text:semanticUserText, attachments, skills:turnSkills});
+        userMsg.intent = intent.intent;
+        userMsg.intentConfidence = intent.confidence;
+        if(intent.intent === 'chat' || intent.intent === 'inspect_canvas'){
+            await agentRunChatStage({conversationId:ownerConversationId, userMsg, text:semanticUserText || messageText, attachments:[], history:historyMsgs, canvasSnapshot:intent.intent === 'inspect_canvas' ? userMsg.canvasSnapshot : null, intent:intent.intent});
+            return;
+        }
+        // 明确的图片分析/反推提示词请求在任何规划前短路处理。
+        if(agentLooksLikeImageAnalysisRequest(semanticUserText) && imageUrls.length){
+            await agentRunImageAnalysisStage({conversationId:ownerConversationId, userMsg, text:semanticUserText, attachments});
+            return;
+        }
         // 修改意见优先：不重跑理解，只改策划
         const pendingRevise = agentGetPendingRevisePlanning(ownerConversationId);
         if(pendingRevise){
@@ -9148,7 +9932,7 @@ async function sendAgentMessage(){
         agentThinkingStage = '';
         agentThinking = false;
         agentThinkingConversationId = '';
-        {
+        if(!e?.__canvasAgentReported){
             const cid = ownerConversationId || agentState.activeConversationId || '';
             agentPushMessageToConversation(cid, {id:uid('am'), role:'assistant', text:`⚠️ ${String(e.message || e).slice(0, 300)}`, generations:[], contextSources:userMsg?.contextSources || null, ts:Date.now(), conversationId:cid});
             agentRenderConversation(cid);
@@ -9512,8 +10296,9 @@ async function runAgentGenerations(assistantMsg, userMsg){
     agentState.genModel = genModel;
     const size = apiImageSize(agentState.genRatio || 'square', agentState.genResolution || '1k') || '1024x1024';
     const lastResults = agentLastResults();
-    const currentAttach = (userMsg?.images || []).filter(i => i?.url);
-    const attachRefs = currentAttach.length ? currentAttach : agentLastUserAttachments();
+    // 参考图只允许来自本次用户消息的冻结附件快照。
+    // 绝不回退到 agentLastUserAttachments()，否则新任务会偷偷继承上一轮图片。
+    const attachRefs = (userMsg?.images || []).filter(i => i?.url);
     // 第一步：串行创建所有占位节点（确保位置不重叠、顶部对齐）
     const pendingGens = gens.filter(gen => !(gen.results && gen.results.length) && gen.status !== 'done' && gen.status !== 'error');
     const placeholders = [];
@@ -9531,7 +10316,11 @@ async function runAgentGenerations(assistantMsg, userMsg){
                 refsForBox = gen.direct_refs.filter(r => r?.url);
             } else {
                 // no-op: 已禁用默认参考上一轮图
-                if(gen.use_attachments) refsForBox = refsForBox.concat(attachRefs);
+                if(gen.use_attachments && Array.isArray(gen.attachment_indices)){
+                    refsForBox = refsForBox.concat(gen.attachment_indices
+                        .filter(i => Number.isInteger(Number(i)) && Number(i) >= 0 && Number(i) < attachRefs.length)
+                        .map(i => attachRefs[Number(i)]).filter(Boolean));
+                }
             }
             refsForBox = imageRefsOnly(refsForBox).slice(0, providerMaxReferenceImages(providerId));
             const pendingBox = agentPendingBoxSize(gen.count, {refs: refsForBox});
@@ -9569,7 +10358,8 @@ async function runAgentGenerations(assistantMsg, userMsg){
                             .filter(Boolean);
                         refs = refs.concat(filtered);
                     } else {
-                        refs = refs.concat(attachRefs);
+                        // No indices means no implicit references. The planner
+                        // must explicitly bind every image used by this step.
                     }
                 }
             }
@@ -9666,7 +10456,8 @@ async function runAgentGenerations(assistantMsg, userMsg){
 // 恢复中断的 Agent 生图任务（页面刷新后调用）
 async function recoverAgentGenerations(){
     if(!agentState?.messages) return;
-    const msgs = agentState.messages;
+    const recoveryConversationId = String(agentActiveWorkflow?.conversationId || agentState.activeConversationId || '').trim();
+    const msgs = agentEnsureConversationMessages(recoveryConversationId) || [];
     for(let i = msgs.length - 1; i >= 0; i--){
         const msg = msgs[i];
         if(msg.role !== 'assistant') continue;
@@ -10324,7 +11115,9 @@ function initAgentInputResize(){
                 if(agentComposerSyncing) return;
                 agentAutoResizeInput();
             });
-            mo.observe(textarea, {childList:true, subtree:true, characterData:true});
+            if(textarea && textarea.nodeType === 1){
+                mo.observe(textarea, {childList:true, subtree:true, characterData:true});
+            }
             textarea.__agentComposerMutationObserver = mo;
         }
     }catch(_){ }
@@ -10425,6 +11218,9 @@ function initAgentPanel(){
     renderAgentMessages();
     initAgentInputResize();
     initAgentSkillUi();
+    // 后端状态异步回填：首屏仍可由轻量本地缓存立即打开，随后恢复完整历史。
+    // 只接受时间戳更新的远端快照，避免覆盖用户刚刚在当前页输入的新内容。
+    queueMicrotask(() => { agentHydrateStateFromBackend(); });
     agentInputModeSwitch?.querySelectorAll('[data-agent-input-mode]').forEach(btn => {
         btn.addEventListener('click', () => agentSetInputMode(btn.dataset.agentInputMode || 'agent'));
     });
@@ -10786,10 +11582,17 @@ let agentSendSelectionSnapshot = [];
 
 function agentBuildAttachmentsFromNodes(imageNodes){
     const atts = [];
+    // 普通画布的一次工作流会同时选中 generator 与 output，它们指向同一张
+    // 真实图片。一次“选中内容 → 参考图”只能保留一个引用；但不要在这里做
+    // 全局去重，以便用户随后再次点同一张图片时仍能重复插入到输入框。
+    const seenUrls = new Set();
     for(const node of (imageNodes || [])){
         const source = agentNodeImages(node)[0] || (node.url ? {url:node.url, name:node.name || node.title || 'image'} : null);
         const item = source && typeof imageForDisplay === 'function' ? imageForDisplay(source) : source;
         if(!item?.url) continue;
+        const urlKey = String(item.url);
+        if(seenUrls.has(urlKey)) continue;
+        seenUrls.add(urlKey);
         atts.push({
             url: item.url,
             name: item.name || node.title || node.name || 'image',
@@ -10825,23 +11628,145 @@ function agentSelectionGhostClickHandler(e){
         if(!t || !t.closest) return;
         // 输入框/面板内点击不处理
         if(t.closest('#agentPanel, .agent-panel, #agentInput, .agent-input-editor')) return;
+        // 普通画布 Output 的图片点击会被预览控件吞掉，不能再等宿主更新选区。
+        // 直接从 DOM 中取原图 URL，保证点哪张就引用哪张。
+        const outputClickAttachments = agentClassicOutputAttachmentsFromTarget(t);
+        if(outputClickAttachments.length){
+            if(Date.now() < Number(agentClassicOutputCaptureUntil || 0)) return;
+            agentClassicOutputCaptureUntil = Date.now() + 400;
+            agentSuppressSelectionGhostSyncUntil = Date.now() + 1800;
+            // Output 图片点击已由精确命中的 DOM 图片处理。清掉此前节点/框选
+            // 手势窗口，避免普通画布延迟写回的旧选区又把其它输出追加进来。
+            agentSelectionGestureUntil = 0;
+            agentGhostConfirmedSig = '';
+            agentLastSelectionSig = '';
+            setAgentGhostAttachments(outputClickAttachments);
+            return;
+        }
         // 智能画布节点 / 普通画布图片节点
         const nodeEl = t.closest('.image-node, .node, [data-id]');
         if(!nodeEl) return;
+        // 智能画布的图片缩略图点击目前会强制单选；因此 Shift/Ctrl 点击
+        // 不能只读取宿主选区，否则第二张图会覆盖第一张。这里直接从点击
+        // 的节点构造附件，并与当前灰态集合合并，保留 Lovart 式多图预选。
+        const appendSelection = Boolean(e.shiftKey || e.ctrlKey || e.metaKey);
+        const hitId = nodeEl.dataset?.id || nodeEl.getAttribute?.('data-id') || '';
+        if(e.type === 'click'
+            && hitId
+            && agentLastSelectionPointerUp.nodeId === hitId
+            && Date.now() < Number(agentLastSelectionPointerUp.until || 0)){
+            return;
+        }
+        if(e.type === 'pointerup' && hitId){
+            agentLastSelectionPointerUp = {nodeId:hitId, until:Date.now() + 450};
+        }
+        let hitAttachments = [];
+        if(hitId){
+            try{
+                const hitNode = agentHost?.getNode?.(hitId);
+                if(hitNode) hitAttachments = agentBuildAttachmentsFromNodes([hitNode]);
+            }catch(_){ }
+        }
         // 延迟一帧，等宿主画布把 selectedId 写好
         window.setTimeout(() => {
             try{
                 const imageNodes = selectedAgentImageNodes();
-                if(!imageNodes.length) return;
-                // 若点中的节点不在选中图片里，忽略
-                const hitId = nodeEl.dataset?.id || nodeEl.getAttribute?.('data-id') || '';
-                if(hitId && !imageNodes.some(n => n.id === hitId)) return;
+                // 普通画布的 Output 图片点击会打开预览并阻止节点选中；此时
+                // 不能把旧的选区当作本次目标，必须以实际点击的图片节点为准。
+                // 对没有可用图片的普通节点，才回退到宿主选区。
+                const clickedImages = hitAttachments.length ? hitAttachments : agentBuildAttachmentsFromNodes(imageNodes);
+                if(!clickedImages.length) return;
+                // 追加键只增加这次点中的图片，避免宿主单选状态把原有灰态覆盖。
+                if(appendSelection && hitAttachments.length){
+                    const merged = [];
+                    const seen = new Set();
+                    [...(agentGhostAttachments || []), ...hitAttachments].forEach(att => {
+                        const key = agentAttachmentKey(att);
+                        if(!key || seen.has(key)) return;
+                        seen.add(key); merged.push(att);
+                    });
+                    if(merged.length){
+                        agentGhostConfirmedSig = '';
+                        agentLastSelectionSig = merged.map(a => `${a.nodeId||''}:${a.url||''}`).join('|');
+                        setAgentGhostAttachments(merged);
+                        return;
+                    }
+                }
+                // 普通单击也优先使用直接命中的图片，避免 Output 预览点击保留
+                // 旧选区并把上一张图片错误塞进输入框。
+                if(hitAttachments.length){
+                    agentForceGhostFromNodes([agentHost?.getNode?.(hitId)].filter(Boolean), {reason:'node-click'});
+                    return;
+                }
                 agentForceGhostFromNodes(imageNodes, {reason:'node-click'});
             }catch(err){
                 console.warn('[canvas-agent] force ghost on click failed', err);
             }
         }, 0);
     }catch(_){ }
+}
+
+function agentClassicOutputAttachmentsFromTarget(target){
+    try{
+        const wrap = target?.closest?.('.output-img-wrap');
+        if(!wrap) return [];
+        const nodeEl = wrap.closest('.node.output-node[data-id], .output-node[data-id]');
+        const nodeId = nodeEl?.dataset?.id || nodeEl?.getAttribute?.('data-id') || '';
+        const img = target?.closest?.('img') || wrap.querySelector?.('img');
+        // 普通画布的 generator/output 节点可能在异步写回期间仍保留上一张
+        // 图片；用户点的是 DOM 中这张缩略图，就必须以它的真实 URL 为准。
+        // `/api/media-preview?...&url=` 只是预览代理，解出其中的原图 URL。
+        let url = img?.dataset?.originalSrc || img?.dataset?.url || '';
+        if(!url){
+            const src = img?.getAttribute?.('src') || '';
+            if(src){
+                try{
+                    const parsed = new URL(src, window.location.href);
+                    url = parsed.pathname === '/api/media-preview'
+                        ? (parsed.searchParams.get('url') || '')
+                        : src;
+                }catch(_){ url = src; }
+            }
+        }
+        if(!url) url = wrap.dataset?.outputUrl || '';
+        if(url) return [{
+            url,
+            name: img?.alt || nodeEl?.querySelector?.('.node-title')?.textContent || 'output-image',
+            nodeId,
+            x: 0,
+            y: 0
+        }];
+        const hitNode = nodeId ? agentHost?.getNode?.(nodeId) : null;
+        const fromNode = hitNode ? agentBuildAttachmentsFromNodes([hitNode]) : [];
+        if(fromNode.length) return fromNode;
+        return [];
+    }catch(_){
+        return [];
+    }
+}
+
+// 普通画布的 Output 图片本身会在 click 中打开灯箱并 stopPropagation()。
+// 虽然常规节点点击可由 click / pointerup 处理，但 Output 的图片必须在
+// pointerdown 捕获阶段抢先取到，才能既打开预览又稳定进入 Agent 的灰态参考。
+// 这里只接管实际图片区域，不影响节点标题、删除、拖拽和普通节点的既有选择逻辑。
+function agentClassicOutputGhostPointerDownHandler(e){
+    try{
+        if(!agentOpen || !e || (e.button != null && e.button !== 0)) return;
+        const atts = agentClassicOutputAttachmentsFromTarget(e.target);
+        if(!atts.length) return;
+        // Output 节点通常不会被 selectedAgentImageNodes 识别；短暂抑制轮询，
+        // 防止宿主随后清空选区把刚显示的灰态参考又删除。
+        agentSuppressSelectionGhostSyncUntil = Date.now() + 1800;
+        agentClassicOutputCaptureUntil = Date.now() + 400;
+        // 这次单击的目标已经确定为 Output 图片；不能让同一次 pointerdown
+        // 开启的宿主多选窗口在稍后覆盖这个单图灰态引用。
+        agentSelectionGestureUntil = 0;
+        agentGhostConfirmedSig = '';
+        agentLastSelectionSig = '';
+        setAgentGhostAttachments(atts);
+    }catch(err){
+        console.warn('[canvas-agent] classic output ghost capture failed', err);
+    }
 }
 
 function selectedAgentImageNodes(){
@@ -10860,6 +11785,17 @@ function selectedAgentImageNodes(){
     });
 }
 
+function agentTrackSelectionGesture(e){
+    try{
+        if(!agentOpen || !e || (e.button != null && e.button !== 0)) return;
+        const target = e.target;
+        if(target?.closest?.('#agentPanel, .agent-panel, #agentInput, .agent-input-editor, [data-canvas-interactive]')) return;
+        // 鼠标在画布上的点击、Shift 多选或 Ctrl 框选都会打开一个短窗口。
+        // 程序新建节点不会产生 pointer 事件，因此无法进入这个窗口。
+        agentSelectionGestureUntil = Date.now() + 1600;
+    }catch(_){ }
+}
+
 function agentSnapshotSelectedImagesForSend(){
     const liveSelection = selectedAgentImageNodes();
     if(liveSelection.length) agentSendSelectionSnapshot = liveSelection.slice();
@@ -10869,7 +11805,11 @@ function agentSnapshotSelectedImagesForSend(){
 function syncAgentSelectionButton(){
     if(smartSendAgentBtn){
         const imageNodes = selectedAgentImageNodes();
-        if(imageNodes.length) agentSendSelectionSnapshot = imageNodes.slice();
+        // 仅真实的用户鼠标手势能更新发送快照；任务自动选中的输出节点
+        // 不能覆盖它，否则下一条无参考图需求会继承上一轮结果。
+        if(imageNodes.length && Date.now() <= Number(agentSelectionGestureUntil || 0)){
+            agentSendSelectionSnapshot = imageNodes.slice();
+        }
         smartSendAgentBtn.hidden = imageNodes.length === 0;
         smartSendAgentBtn.classList.toggle('visible', imageNodes.length > 0);
         const label = smartSendAgentBtn.querySelector('span');
@@ -10882,6 +11822,10 @@ function syncAgentSelectionButton(){
             if(agentGhostAttachments.length) clearAgentGhostAttachment({rerender:true});
             return;
         }
+        // 任务创建节点时，宿主会自动更新选区。该选区不是用户点击，不能
+        // 自动变成灰态参考图；真正的鼠标点击仍由点击处理器立即处理。
+        if(Date.now() < Number(agentSuppressSelectionGhostSyncUntil || 0)) return;
+        if(Date.now() > Number(agentSelectionGestureUntil || 0)) return;
         // 点画布前若输入框仍有有效光标，先锁住；canvas 点击后 selection 往往已不在输入框
         try{
             if(agentIsComposerEl() && document.activeElement === agentInput) agentSaveComposerCaret();
@@ -10986,9 +11930,58 @@ function ensureAgentProfessionalPrompt(prompt,userPrompt){
         .trim();
     return base;
 }
+// 只有明确的正向组合/融合动作才进入 fusion；“不要融合/不能合成”等
+// 否定表达不能改变任务依赖类型。这个判断同时供阶段2规划和执行前兜底使用。
+function agentFusionTermIsNegated(text='', index=0){
+    const t = String(text || '');
+    const before = t.slice(Math.max(0, Number(index) - 24), Number(index));
+    return /(?:不|未|无|不要|不需要|无需|不能|不可|不得|禁止|严禁|避免|勿|取消|去掉|不再|不是|并非|而非|不做|不进行)\s*(?:再|将|把|让|进行|做|使用|去)?\s*$/.test(before)
+        || /(?:不要|不需要|无需|不能|不可|不得|禁止|严禁|避免|取消|去掉|不再|不是|并非|而非|不做|不进行)[^。；;，,\n]{0,16}$/.test(before);
+}
+function agentHasPositiveFusionIntent(text=''){
+    const t = String(text || '');
+    // Keep this helper self-contained: lightweight VM regression tests (and a
+    // few plugin consumers) extract it without the neighbouring negation
+    // helper.  The local check mirrors agentFusionTermIsNegated exactly.
+    const isNegated = index => {
+        const before = t.slice(Math.max(0, Number(index) - 24), Number(index));
+        return /(?:不|未|无|不要|不需要|无需|不能|不可|不得|禁止|严禁|避免|勿|取消|去掉|不再|不是|并非|而非|不做|不进行)\s*(?:再|将|把|让|进行|做|使用|去)?\s*$/.test(before)
+            || /(?:不要|不需要|无需|不能|不可|不得|禁止|严禁|避免|取消|去掉|不再|不是|并非|而非|不做|不进行)[^。；;，,\n]{0,16}$/.test(before);
+    };
+    const termRe = /组合|结合|合成|融合|拼在一起|合并|合在一起|放在一起|拼合|合成为|合成一张|合成一图|同框|追逐|打架|互动|对峙|拥抱|共同出现在|一张完整画面/g;
+    let match;
+    while((match = termRe.exec(t))){
+        if(!isNegated(match.index)) return true;
+    }
+    // “把这两张放在一起/做成一张”是组合语义；仍然尊重前面的否定词。
+    const pairRe = /(?:把|将)这(?:两|二|三|四|五|六|七|八|九|十|\d+)张[^。；;\n]{0,24}(?:放在一起|拼在一起|组合|结合|合成|融合|合并|同框|一张完整画面)/g;
+    while((match = pairRe.exec(t))){
+        if(!isNegated(match.index)) return true;
+    }
+    return false;
+}
 // v2：所有 Agent 生图统一转换为可审计的画布计划，再由画布原生节点执行。
 function agentLooksLikeFusionPrompt(text=''){
-    return /组合|结合|合成|融合|拼在一起|合并|合在一起|放在一起|拼合|合成为|合成一张|合成一图|把这[两三三四五六七八九十\d]+张|将这[两三三四五六七八九十\d]+张/.test(String(text||''));
+    // Deliberately repeat the tiny detector here instead of delegating to a
+    // top-level helper.  This function is also loaded in isolation by older
+    // hosts/tests, so it must still honour "不要融合" without a missing
+    // global-function error.
+    const t = String(text || '');
+    const isNegated = index => {
+        const before = t.slice(Math.max(0, Number(index) - 24), Number(index));
+            return /(?:不|未|无|不要|不需要|无需|不能|不可|不得|禁止|严禁|避免|勿|取消|去掉|不再|不是|并非|而非|不做|不进行)\s*(?:再|将|把|让|进行|做|使用|去)?\s*$/.test(before)
+                || /(?:不要|不需要|无需|不能|不可|不得|禁止|严禁|避免|取消|去掉|不再|不是|并非|而非|不做|不进行)[^。；;，,\n]{0,16}$/.test(before);
+    };
+    const termRe = /组合|结合|合成|融合|拼在一起|合并|合在一起|放在一起|拼合|合成为|合成一张|合成一图|同框|追逐|打架|互动|对峙|拥抱|共同出现在|一张完整画面/g;
+    let match;
+    while((match = termRe.exec(t))){
+        if(!isNegated(match.index)) return true;
+    }
+    const pairRe = /(?:把|将)这(?:两|二|三|四|五|六|七|八|九|十|\d+)张[^。；;\n]{0,24}(?:放在一起|拼在一起|组合|结合|合成|融合|合并|同框|一张完整画面)/g;
+    while((match = pairRe.exec(t))){
+        if(!isNegated(match.index)) return true;
+    }
+    return false;
 }
 function agentLooksLikeSeriesPrompt(text=''){
     return /详情页|主图|套图|系列|整套|多页|电商详情|产品页|包装|三视图|定稿|一致性|统一文字|统一配色|品牌设定|shared_style|产品一致性/.test(String(text||''));
@@ -11108,7 +12101,13 @@ function agentBuildProductReferencePrompt(productGen, pagePrompt='', userText=''
 function agentMarkGenerationDependencies(gens, userText='', sharedStyle=''){
     if(!Array.isArray(gens) || !gens.length) return gens;
     const style = String(sharedStyle || gens.find(g => g?.shared_style)?.shared_style || '').trim();
-    const fusionHint = agentLooksLikeFusionPrompt(userText) || gens.some(g => agentLooksLikeFusionPrompt(g.prompt) || agentNormalizeDependencyMode(g.dependency_mode, g.prompt)==='fusion');
+    // 用户明确表达的语义优先于 LLM 偶发的 dependency_mode 误标：
+    // “定稿/主图/详情页/套图”是单一产品或人物参考链，应使用 product_reference；
+    // 只有用户明确写出融合/合成等动作时，才允许进入 fusion 分支。
+    const userFusionHint = agentLooksLikeFusionPrompt(userText);
+    const userSeriesHint = agentLooksLikeSeriesPrompt(userText);
+    const generatedFusionHint = gens.some(g => agentLooksLikeFusionPrompt(g.prompt) || agentNormalizeDependencyMode(g.dependency_mode, g.prompt)==='fusion');
+    const fusionHint = userFusionHint || (generatedFusionHint && !userSeriesHint);
     // 分句精确参考图（如 图1+图2 做主图，图3+图2 做详情）不应被“主图/详情页”关键词误判成产品系列依赖
     const exactAttachPlan = gens.length >= 2
         && gens.every(g => Array.isArray(g.attachment_indices) && g.attachment_indices.length)
@@ -11133,7 +12132,6 @@ function agentMarkGenerationDependencies(gens, userText='', sharedStyle=''){
     // 详情页/系列套图：第1张产品定稿，后续页引用产品图，而不是融合
     if(seriesHint && !fusionHint){
         gens.forEach((g, i) => {
-            const mode = agentNormalizeDependencyMode(g.dependency_mode, g.prompt);
             g.shared_style = style || g.shared_style || '';
             if(i === 0){
                 g.dependency_mode = 'none';
@@ -11141,7 +12139,10 @@ function agentMarkGenerationDependencies(gens, userText='', sharedStyle=''){
                 g.use_previous_results = false;
                 if(!g.use_attachments) g.use_last_outputs = false;
             }else{
-                g.dependency_mode = mode === 'fusion' ? 'fusion' : 'product_reference';
+                // 套图/定稿链中，LLM 偶发的 fusion 标记不能改变用户语义；
+                // 本分支已经确认用户没有要求融合，因此所有后续页统一绑定唯一
+                // 产品/人物定稿，使用 product_reference。
+                g.dependency_mode = 'product_reference';
                 g.depends_on_previous = true;
                 g.use_last_outputs = false; // same-plan deps via depends_on_previous only
                 g.use_previous_results = true;
@@ -11432,6 +12433,8 @@ runAgentGenerations = async function(assistantMsg,userMsg,options={}){
         throw new Error('当前已有生图任务正在执行，请等待完成后重试');
     }
     window.__canvasAgentGenRunning = true;
+    // 整个执行期内，忽略节点创建/输出落盘导致的自动选中。
+    agentSuppressSelectionGhostSyncUntil = Date.now() + 60 * 60 * 1000;
     if(assistantMsg && ownerConversationId) assistantMsg.conversationId = ownerConversationId;
     if(userMsg && ownerConversationId) userMsg.conversationId = ownerConversationId;
     const isOwnerConversation = () => !ownerConversationId || agentState?.activeConversationId === ownerConversationId;
@@ -11576,7 +12579,8 @@ runAgentGenerations = async function(assistantMsg,userMsg,options={}){
         console.warn('[canvas-agent] pre-materialize attachments failed', err);
     }
     const sharedStyle = String(assistantMsg?.shared_style || gens.find(g => g?.shared_style)?.shared_style || '').trim();
-    // attachment_indices、步骤数量和依赖关系均来自同一次 LLM 规划；执行层不再推断或改写。
+    // attachment_indices、步骤数量和依赖关系以同一次 LLM 规划为准；
+    // 仅对“后续独立步骤遗漏本轮附件索引”的结构缺口做最小补全。
     if(sharedStyle){
         assistantMsg.shared_style = sharedStyle;
         // shared_style 只作审计元数据；每张最终 prompt 已由同一次 LLM 定稿，执行层不再补写。
@@ -11584,10 +12588,14 @@ runAgentGenerations = async function(assistantMsg,userMsg,options={}){
             if(!g.shared_style) g.shared_style = sharedStyle;
         });
     }
-    // 用户本轮已上传/引用参考图时：按 attachment_indices 连线；缺省时执行前再补一次索引
+    // 用户本轮已上传/引用参考图时：按 attachment_indices 连线；缺省项已在上方补齐
     const userText = String(userMsg?.text || '');
     const hasUserAttachments = attachments.length > 0;
     try{ agentForceNoStaleLastOutputs(gens, userText, attachments); }catch(_){ }
+    // LLM 可能只在第一步声明本轮参考图；对后续独立步骤补齐同一批用户附件。
+    // 该补全发生在生成 step.references 之前，因此普通/智能画布都会真正建立连线。
+    // 已明确的 attachment_indices、direct_refs 和前序依赖均保持不变。
+    try{ agentBindMissingUserAttachmentIndices(gens, userText, attachments); }catch(_){ }
     const steps=gens.map((gen,index)=>{
         let refs=[];
         const depMode = agentNormalizeDependencyMode(gen.dependency_mode, gen.prompt || gen.professionalPrompt || '');
@@ -11683,13 +12691,13 @@ runAgentGenerations = async function(assistantMsg,userMsg,options={}){
         const plannedQuality = agentNormalizeQualityValue(gen.quality || '');
         const frozen = resolveAgentGenerationSettings(settingsText, {
             count: Math.max(1, Math.min(8, Number(gen.count) || 1)),
-            ratio: explicitUserRatio || gen.ratio || taskSettings.ratio || '',
-            resolution: explicitUserResolution || gen.resolution || taskSettings.resolution || '',
-            quality: explicitUserQuality || plannedQuality || taskSettings.quality || ''
+            ratio: explicitUserRatio || taskSettings.ratio || gen.ratio || '',
+            resolution: explicitUserResolution || taskSettings.resolution || gen.resolution || '',
+            quality: explicitUserQuality || taskSettings.quality || plannedQuality || ''
         });
         // count 以 LLM 该步字段为准；缺失时才看原文/工具栏
         const stepCount = Math.max(1, Math.min(8, Number(gen.count) || frozen.count || 1));
-        const resolvedStepSettings = agentResolveStepGenerationSettings(explicitUserText, gen, frozen);
+        const resolvedStepSettings = agentResolveStepGenerationSettings(explicitUserText, gen, {...frozen, prefer_task_settings:true});
         const stepRatio = resolvedStepSettings.ratio;
         const stepResolution = resolvedStepSettings.resolution;
         const stepQuality = resolvedStepSettings.quality;
@@ -12095,6 +13103,9 @@ return{
         }catch(_){ }
         // 全局发送锁释放：后台任务结束也要让当前对话能继续发
         agentSending=false;
+        // 给宿主最后一次输出选区同步留出缓冲；随后用户点击任意图片会由
+        // agentSelectionGhostClickHandler 显式加入，而不是被动继承。
+        agentSuppressSelectionGhostSyncUntil = Date.now() + 1500;
         if(agentThinkingConversationId === ownerConversationId || isOwnerConversation()){
             agentThinking=false;
             if(agentThinkingConversationId === ownerConversationId) agentThinkingConversationId = '';
@@ -12174,6 +13185,8 @@ function mountCanvasAgent(){
         agentSendSelectionSnapshot = [];
     }, true);
     selectionTimer = window.setInterval(syncAgentSelectionButton, 250);
+    document.addEventListener('pointerdown', agentTrackSelectionGesture, true);
+    document.addEventListener('pointerdown', agentClassicOutputGhostPointerDownHandler, true);
     document.addEventListener('click', agentSelectionGhostClickHandler, true);
     document.addEventListener('pointerup', agentSelectionGhostClickHandler, true);
     syncAgentSelectionButton();
@@ -12188,6 +13201,8 @@ function unmountCanvasAgent(){
     agentSendSelectionSnapshot = [];
     document.removeEventListener('click', agentSelectionGhostClickHandler, true);
     document.removeEventListener('pointerup', agentSelectionGhostClickHandler, true);
+    document.removeEventListener('pointerdown', agentTrackSelectionGesture, true);
+    document.removeEventListener('pointerdown', agentClassicOutputGhostPointerDownHandler, true);
     endAgentStream();
     document.getElementById('agentToggle')?.remove();
     document.getElementById('smartSendAgentBtn')?.remove();
@@ -12272,7 +13287,7 @@ function agentInferAttachmentIndicesForGeneration(g, userText='', attachCount=0,
     return [];
 }
 
-function agentStructureValidateGenerations(gens, userText='', attachments=[]){
+function agentStructureValidateGenerations(gens, userText='', attachments=[], skillsArg=[]){
     const warnings = [];
     const errors = [];
     const list = Array.isArray(gens) ? gens : [];
@@ -12289,7 +13304,9 @@ function agentStructureValidateGenerations(gens, userText='', attachments=[]){
         const rawCount = Number(g.count);
         const count = Math.max(1, Math.min(8, rawCount || 1));
         if(Number.isFinite(rawCount) && rawCount !== count) warnings.push('步骤' + (i+1) + ' count 已夹到 1~8');
-        const skills = (agentState && agentState.skills) || [];
+        const skills = Array.isArray(skillsArg) && skillsArg.length
+            ? skillsArg
+            : ((agentState && agentState.skills) || []);
         let indices = agentInferAttachmentIndicesForGeneration(g, userText, attachCount, i, list.length, skills);
         let dependsPrev = !!g.depends_on_previous;
         let depMode = String(g.dependency_mode || 'none').toLowerCase();
@@ -12324,7 +13341,8 @@ function agentStructureValidateGenerations(gens, userText='', attachments=[]){
             });
             warnings.push('本轮有参考图但规划未声明索引，已自动挂上全部参考图');
         }
-        if(agentShouldKeepUserAttachmentsForSeries(userText, attachments, (agentState && agentState.skills) || [])){
+        if(agentShouldKeepUserAttachmentsForSeries(userText, attachments,
+            Array.isArray(skillsArg) && skillsArg.length ? skillsArg : ((agentState && agentState.skills) || []))){
             cleaned.forEach(g => {
                 g.depends_on_previous = false;
                 g.use_previous_results = false;
@@ -12421,7 +13439,7 @@ function agentThinLandGenerations(gens, userText='', attachments=[], defaults={}
     });
 }
 
-function agentApplyComplexRequestGuards(parsed, userText, attachments){
+function agentApplyComplexRequestGuards(parsed, userText, attachments, skillsArg=[]){
     if(!parsed || typeof parsed !== 'object') return parsed;
     if(!Array.isArray(parsed.options)) parsed.options = [];
     if(!Array.isArray(parsed.generations)) parsed.generations = [];
@@ -12430,9 +13448,10 @@ function agentApplyComplexRequestGuards(parsed, userText, attachments){
     if(parsed.generations.length){
         parsed.generations = agentThinLandGenerations(parsed.generations, userText, attachments, {
             shared_style: parsed.shared_style || '',
-            skills: (agentState && agentState.skills) || []
+            skills: Array.isArray(skillsArg) && skillsArg.length ? skillsArg : ((agentState && agentState.skills) || [])
         });
-        const check = agentStructureValidateGenerations(parsed.generations, userText, attachments);
+        const check = agentStructureValidateGenerations(parsed.generations, userText, attachments,
+            Array.isArray(skillsArg) && skillsArg.length ? skillsArg : ((agentState && agentState.skills) || []));
         parsed.generations = check.generations;
         parsed._structure = { warnings: check.warnings, errors: check.errors, ok: check.ok };
         if(!check.ok){
@@ -12456,7 +13475,76 @@ function agentBuildStoryFramePrompt(basePrompt, label, index=0, total=3, style='
 function agentBuildVariantPrompt(basePrompt, label, index, total, style=''){ return String(basePrompt || '').trim(); }
 function agentBuildStepPromptFromBase(basePrompt, label, index, total, style=''){ return String(basePrompt || '').trim(); }
 function agentEmotionActionLine(label=''){ return ''; }
-function agentMarkGenerationDependencies(gens, userText='', sharedStyle=''){ return gens; }
+// 薄落地依赖绑定：只把 LLM 已规划的“定稿/主图/详情”语义映射到
+// product_reference，或把明确的正向融合映射到 fusion；不重写 prompt、
+// 不补姿势/表情、不追加隐藏步骤。该函数位于文件末尾，覆盖早期旧版
+// 厚加固实现，确保运行时真正采用薄落地策略。
+function agentMarkGenerationDependencies(gens, userText='', sharedStyle=''){
+    if(!Array.isArray(gens) || !gens.length) return gens;
+    const text = String(userText || '').trim();
+    const isNegatedFusion = /(?:不要|不需要|无需|不能|不可|不得|禁止|严禁|避免|取消|去掉|不再|不是|并非|而非|不做|不进行)[^。；;，,\n]{0,20}(?:融合|合成|组合|结合|拼在一起|同框|放在一起)/.test(text);
+    const positiveFusion = !isNegatedFusion && (
+        typeof agentHasPositiveFusionIntent === 'function'
+            ? agentHasPositiveFusionIntent(text)
+            : /(?:融合|合成|组合|结合|拼在一起|同框|放在一起|打架|互动|对峙|追逐)/.test(text)
+    );
+    const seriesIntent = /主图|详情(?:页|图)?|套图|系列|整套|多页|电商|产品页|海报/.test(text);
+    const anchorIntent = typeof agentExplicitGeneratedAnchorRequirements === 'function'
+        && !!agentExplicitGeneratedAnchorRequirements(text, gens);
+    // 否定融合优先级最高：即使句子里有“再/1张”等串行触发词，
+    // 也不能让 chain detector 生成 fusion 需求，避免挡住产品参考归一化。
+    const chainReq = !isNegatedFusion && typeof agentExplicitGeneratedChainRequirements === 'function'
+        ? agentExplicitGeneratedChainRequirements(text, gens)
+        : null;
+
+    // 明确“不要融合”时，清掉 LLM 偶发的 fusion 标记，但不碰其提示词。
+    if(isNegatedFusion && !positiveFusion){
+        gens.forEach(g => {
+            if(!g || String(g.dependency_mode || '').toLowerCase() !== 'fusion') return;
+            g.dependency_mode = 'none';
+            g.depends_on_previous = false;
+            g.use_previous_results = false;
+            g.use_last_outputs = false;
+            g.depends_on_steps = [];
+        });
+    }
+
+    // 单一产品/人物定稿派生主图或详情页：后续步骤只依赖第 1 步。
+    // 显式融合链优先级更高，避免“猫和狗打架”被系列关键词吞掉。
+    if((seriesIntent || anchorIntent) && !positiveFusion && !chainReq){
+        const firstId = String(gens[0]?.id || 'step_1').trim() || 'step_1';
+        gens.forEach((g, index) => {
+            if(!g) return;
+            if(index === 0){
+                g.dependency_mode = 'none';
+                g.depends_on_previous = false;
+                g.use_previous_results = false;
+                g.use_last_outputs = false;
+                g.depends_on_steps = [];
+                return;
+            }
+            g.dependency_mode = 'product_reference';
+            g.depends_on_previous = true;
+            g.use_previous_results = true;
+            g.use_last_outputs = false;
+            g.depends_on_steps = [firstId];
+        });
+    }
+    // 任务明确要求正向融合时，只补齐依赖字段，不拼接或改写 prompt。
+    if(positiveFusion && chainReq){
+        const start = Math.max(1, Number(chainReq.dependentStart) || 1);
+        const foundationIds = gens.slice(0, start).map((g, i) => String(g?.id || `step_${i + 1}`).trim() || `step_${i + 1}`);
+        gens.forEach((g, index) => {
+            if(!g || index < start) return;
+            g.dependency_mode = 'fusion';
+            g.depends_on_previous = true;
+            g.use_previous_results = true;
+            g.use_last_outputs = false;
+            g.depends_on_steps = foundationIds.slice();
+        });
+    }
+    return gens;
+}
 function agentNormalizeDependencyMode(mode, prompt=''){
     const m = String(mode || '').trim().toLowerCase();
     if(m === 'fusion' || m === 'product_reference' || m === 'none') return m;
@@ -12482,6 +13570,47 @@ function agentEnsureGenerationAttachmentIndices(gens, userText, attachCount){
             g.use_attachments = false;
             g.attachment_indices = [];
         }
+    });
+    return gens;
+}
+// 执行前的最小结构补全：LLM 有时只在第一步写出 attachment_indices，
+// 后续同属本轮的独立生图步骤会遗漏索引，导致只有第一个节点真正连线。
+// 这里只补“空索引”，绝不覆盖 LLM 已明确指定的图号或同计划前序依赖。
+function agentBindMissingUserAttachmentIndices(gens, userText='', attachments=[]){
+    if(!Array.isArray(gens) || !gens.length) return gens;
+    const refs = (Array.isArray(attachments) ? attachments : []).filter(item => item?.url);
+    const n = refs.length;
+    if(!n) return gens;
+    const all = Array.from({length:n}, (_, i) => i);
+    const explicit = gens.some(g => {
+        if(!g) return false;
+        const idx = agentNormalizeAttachmentIndices(g.attachment_indices, n);
+        return idx.length > 0 || g.use_attachments === true;
+    });
+    if(!explicit) return gens;
+    const text = String(userText || '');
+    const perReference = /分别|各自|每张|一对一|单独(?:把|将|对)?/.test(text)
+        && gens.length === n;
+    const used = new Set();
+    gens.forEach(g => {
+        if(!g) return;
+        const depMode = String(g.dependency_mode || '').toLowerCase();
+        if(g.depends_on_previous || g.use_previous_results || depMode === 'fusion' || depMode === 'product_reference') return;
+        const idx = agentNormalizeAttachmentIndices(g.attachment_indices, n);
+        if(idx.length){
+            g.attachment_indices = idx;
+            g.use_attachments = true;
+            idx.forEach(i => used.add(i));
+            return;
+        }
+        // 已有 direct_refs 的步骤由其 URL 引用控制，不再重复注入全部附件。
+        if(Array.isArray(g.direct_refs) && g.direct_refs.some(r => r?.url)) return;
+        const bind = perReference
+            ? [all.find(i => !used.has(i)) ?? 0]
+            : all.slice();
+        g.attachment_indices = bind;
+        g.use_attachments = true;
+        bind.forEach(i => used.add(i));
     });
     return gens;
 }

@@ -54,6 +54,9 @@
             const model = (requestedModel && models.includes(requestedModel)) ? requestedModel : (requestedModel || models[0] || '');
             // 最后强制写回 provider/model，避免 ...clone(data) 把空值或旧值盖掉 Agent 选择
             node = {id:uid('gen'),type:'generator',...p,apiProvider:provider,model,ratio:'square',resolution:'1k',quality:'auto',count:1,customRatio:'',customSize:'',customRatioWidth:'',customRatioHeight:'',customWidth:'',customHeight:'',inputs:[],...clone(data), apiProvider:provider, model};
+            // Agent 传入的分辨率是本任务已解析的明确参数。标记为用户/Agent 设置，
+            // 防止宿主渲染时 normalizeApiNodeSizeChoice() 把 1K 静默替换为模型默认 4K。
+            if(data && data.resolution && data.resolution !== 'auto') node._apiResolutionUserSet = true;
         } else if(type === 'output') node = {id:uid('out'),type:'output',...p,images:[],_pending:[],...clone(data)};
         else if(type === 'image') node = {id:uid('img'),type:'image',...p,url:'',name:'image',images:[],...clone(data)};
         else throw new Error(`Unsupported classic node type: ${type}`);

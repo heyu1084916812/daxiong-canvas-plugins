@@ -253,7 +253,17 @@
         const token={cancelled:false};activeRuns.set(id,token);
         // 锁定 Agent 模型快照，避免底部默认模型覆盖节点显示/请求
         const runSettings=lockAgentNodeSettings(n) || settingsFor(n);
-        const refs=(n.references||[]).filter(x=>x?.url);
+        // Agent 节点在画布合并/刷新后，`references` 可能被旧的节点序列化逻辑丢掉，
+        // 但本次运行的冻结引用仍保存在 runInputRefs（并且画布连线也仍然存在）。
+        // 执行时必须优先使用 references，缺失时恢复完整的 runInputRefs，不能只取第一张。
+        const savedRefs = Array.isArray(n.references) ? n.references : [];
+        const frozenRefs = Array.isArray(n.runInputRefs) ? n.runInputRefs : [];
+        const refs = (savedRefs.length ? savedRefs : frozenRefs)
+            .filter(x => x?.url)
+            .map(x => ({...x}));
+        if(refs.length && (!Array.isArray(n.references) || n.references.length !== refs.length)){
+            n.references = refs.map(ref => ({...ref}));
+        }
         applyPendingVisual(n, runSettings, refs);
         refresh();
         // 每次读取都用 live 节点，防止 await 期间 nodes 被 409 合并替换导致写到悬空对象
