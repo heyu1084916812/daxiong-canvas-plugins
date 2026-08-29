@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-24T06:36:29.425639Z",
+  "generated_at": "2026-08-29T17:25:59.848587Z",
   "plugins": [
     {
       "id": "canvas-agent",
       "name": "设计大师",
       "description": "在普通画布和智能画布中提供对话、分析、生成与多图任务编排",
       "author": "mufanmu / local migration",
-      "version": "2.2.49",
+      "version": "2.2.83",
       "min_core_version": "2026.07.15",
       "max_core_version": null,
       "requires_capabilities": [
@@ -18,10 +18,10 @@
         "llm.canvas.v1",
         "tasks.canvas-image.v1"
       ],
-      "download_url": "https://github.com/heyu1084916812/daxiong-canvas-plugins/releases/download/canvas-agent-v2.2.49/canvas-agent-v2.2.49.zip",
-      "sha256": "931ae59331d4c7935bf9b8cfa751d61fd0f6f748bf9588f44a9d713e3a0c76c2",
-      "size": 233111,
-      "published_at": "2026-08-24T06:36:29.411958Z",
+      "download_url": "https://github.com/heyu1084916812/daxiong-canvas-plugins/releases/download/canvas-agent-v2.2.83/canvas-agent-v2.2.83.zip",
+      "sha256": "59017cc2a2786fc66ae986bf488d6383f8e4294187acf12fee0517ed623a258d",
+      "size": 257950,
+      "published_at": "2026-08-29T17:25:59.835029Z",
       "changelog": []
     },
     {
@@ -38,7 +38,7 @@
       "download_url": "https://github.com/heyu1084916812/daxiong-canvas-plugins/releases/download/canvas-bug-fix-v1.9.0/canvas-bug-fix-v1.9.0.zip",
       "sha256": "1e116cc5c27e0cfe5fcdbf5d5b758d76a363f981c423f939674940b74ceb9de9",
       "size": 29753,
-      "published_at": "2026-08-24T06:36:29.415755Z",
+      "published_at": "2026-08-29T17:25:59.838723Z",
       "changelog": [
         "所有节点支持 Ctrl+C/Ctrl+V，并正确区分系统剪贴板图片。",
         "图片组内单图支持 Ctrl+C 和 Alt+拖动复制，连接与撤销保持正确。",
@@ -65,7 +65,7 @@
       "download_url": "https://github.com/heyu1084916812/daxiong-canvas-plugins/releases/download/local-patch-v2.7.2/local-patch-v2.7.2.zip",
       "sha256": "0cdfd08c1e768ff2aa5bacea5244a095c37ffb1543be9a94f176c4aea3746a74",
       "size": 51206,
-      "published_at": "2026-08-24T06:36:29.421519Z",
+      "published_at": "2026-08-29T17:25:59.844506Z",
       "changelog": []
     },
     {
@@ -85,7 +85,7 @@
       "download_url": "https://github.com/heyu1084916812/daxiong-canvas-plugins/releases/download/long-image-node-v1.2.0/long-image-node-v1.2.0.zip",
       "sha256": "7f3af07973415a9517c3f37fea8a1351524f91ac8a6115a3c06ec42ff9d8225c",
       "size": 24964,
-      "published_at": "2026-08-24T06:36:29.424353Z",
+      "published_at": "2026-08-29T17:25:59.847300Z",
       "changelog": []
     },
     {
@@ -103,7 +103,7 @@
       "download_url": "https://github.com/heyu1084916812/daxiong-canvas-plugins/releases/download/node-align-distribute-v1.2.1/node-align-distribute-v1.2.1.zip",
       "sha256": "ac71b2406d1865a962467b148dd8a6c4450f057eb337b959d853e8e00fb3e8f6",
       "size": 8893,
-      "published_at": "2026-08-24T06:36:29.425611Z",
+      "published_at": "2026-08-29T17:25:59.848558Z",
       "changelog": []
     }
   ]
